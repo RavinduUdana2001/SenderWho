@@ -1,0 +1,484 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
+
+enum EmailProvider {
+  GOOGLE
+  MICROSOFT
+  YAHOO
+  IMAP
+}
+
+enum SyncStatus {
+  PENDING
+  SYNCING
+  PARTIAL
+  READY
+  FAILED
+  DISCONNECTED
+}
+
+enum SenderCategory {
+  IMPORTANT
+  PEOPLE
+  ORDERS
+  FINANCE
+  NEWSLETTERS
+  PROMOTIONS
+  TRAVEL
+  SOCIAL
+  SPAM
+  UNKNOWN
+}
+
+enum RiskLevel {
+  LOW
+  MEDIUM
+  HIGH
+  CRITICAL
+}
+
+enum IdentityRiskLevel {
+  LOW
+  REVIEW
+  POSSIBLE_IMPERSONATION
+  HIGH
+}
+
+enum IdentityStatus {
+  VERIFIED
+  UNVERIFIED
+  SUSPICIOUS
+}
+
+enum AlertStatus {
+  OPEN
+  RESOLVED
+  DISMISSED
+}
+
+enum JobStatus {
+  QUEUED
+  RUNNING
+  COMPLETED
+  FAILED
+  CANCELED
+}
+
+enum BackgroundJobStatus {
+  QUEUED
+  RUNNING
+  COMPLETED
+  FAILED
+  CANCELED
+}
+
+enum CleanupCategory {
+  MARKETING
+  NEWSLETTERS
+  SPAM
+  OLD_UNREAD
+  LARGE_ATTACHMENTS
+}
+
+enum UnsubscribeMethod {
+  LIST_UNSUBSCRIBE_HEADER
+  UNSUBSCRIBE_LINK
+  MANUAL
+}
+
+enum OAuthLoginStatus {
+  PENDING
+  COMPLETED
+  FAILED
+  EXCHANGED
+}
+
+model User {
+  id                 String              @id @default(cuid())
+  email              String              @unique
+  googleSubject      String?             @unique @db.VarChar(255)
+  yahooSubject       String?             @unique @db.VarChar(255)
+  displayName        String?
+  avatarUrl          String?
+  emailAccounts      EmailAccount[]
+  senders            Sender[]
+  messages           Message[]
+  alerts             SecurityAlert[]
+  cleanupJobs        CleanupJob[]
+  cleanupPlans       CleanupPlan[]
+  unsubscribeJobs    UnsubscribeJob[]
+  auditLogs          AuditLog[]
+  appSessions        AppSession[]
+  oauthLogins        OAuthLoginSession[]
+  settings           UserSettings?
+  idempotencyRecords IdempotencyRecord[]
+  createdAt          DateTime            @default(now())
+  updatedAt          DateTime            @updatedAt
+  deletedAt          DateTime?
+
+  @@index([deletedAt])
+}
+
+model IdempotencyRecord {
+  id          String   @id @default(cuid())
+  userId      String
+  scope       String   @db.VarChar(120)
+  key         String   @db.VarChar(200)
+  requestHash String   @db.VarChar(64)
+  status      String   @default("PENDING") @db.VarChar(16)
+  response    Json?
+  expiresAt   DateTime
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, scope, key])
+  @@index([expiresAt])
+}
+
+model AppSession {
+  id               String    @id @default(cuid())
+  userId           String
+  familyId         String    @db.VarChar(64)
+  parentId         String?
+  replacedById     String?
+  tokenHash        String    @unique @db.VarChar(64)
+  expiresAt        DateTime
+  authenticatedAt  DateTime  @default(now())
+  lastUsedAt       DateTime?
+  revokedAt        DateTime?
+  revocationReason String?   @db.VarChar(64)
+  deviceIdHash     String?   @db.VarChar(64)
+  deviceName       String?   @db.VarChar(120)
+  userAgent        String?   @db.VarChar(500)
+  ipAddress        String?   @db.VarChar(64)
+  user             User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  createdAt        DateTime  @default(now())
+
+  @@index([userId, revokedAt])
+  @@index([familyId, revokedAt])
+  @@index([expiresAt])
+}
+
+model OAuthLoginSession {
+  id                    String           @id @default(cuid())
+  secretHash            String           @unique @db.VarChar(64)
+  provider              EmailProvider
+  purpose               String           @default("LOGIN") @db.VarChar(32)
+  pkceVerifierEncrypted String           @db.Text
+  nonceHash             String           @db.VarChar(64)
+  status                OAuthLoginStatus @default(PENDING)
+  userId                String?
+  appSessionId          String?          @db.VarChar(191)
+  expiresAt             DateTime
+  exchangedAt           DateTime?
+  error                 String?          @db.Text
+  user                  User?            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  createdAt             DateTime         @default(now())
+  updatedAt             DateTime         @updatedAt
+
+  @@index([status, expiresAt])
+  @@index([userId])
+  @@index([appSessionId])
+}
+
+model UserSettings {
+  userId               String   @id
+  notificationsEnabled Boolean  @default(true)
+  inboxScanFrequency   String   @default("Auto") @db.VarChar(32)
+  theme                String   @default("System") @db.VarChar(32)
+  twoFactorEnabled     Boolean  @default(false)
+  dataRetention        String   @default("Metadata only") @db.VarChar(64)
+  privacyMode          String   @default("Standard") @db.VarChar(32)
+  user                 User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
+}
+
+model EmailAccount {
+  id                    String              @id @default(cuid())
+  userId                String
+  provider              EmailProvider
+  providerAccountId     String
+  emailAddress          String
+  displayName           String?
+  accessTokenEncrypted  String?             @db.Text
+  refreshTokenEncrypted String?             @db.Text
+  tokenExpiresAt        DateTime?
+  scopes                Json?
+  syncStatus            SyncStatus          @default(PENDING)
+  historyId             String?
+  backfillPageToken     String?             @db.Text
+  backfillHistoryId     String?             @db.VarChar(255)
+  backfillComplete      Boolean             @default(false)
+  backfillProcessed     Int                 @default(0)
+  syncStartedAt         DateTime?
+  lastSyncedAt          DateTime?
+  lastSyncError         String?             @db.Text
+  metadataVersion       Int                 @default(1)
+  user                  User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+  senders               Sender[]
+  messages              Message[]
+  alerts                SecurityAlert[]
+  cleanupSuggestions    CleanupSuggestion[]
+  cleanupJobs           CleanupJob[]
+  cleanupPlans          CleanupPlan[]
+  createdAt             DateTime            @default(now())
+  updatedAt             DateTime            @updatedAt
+
+  @@unique([provider, providerAccountId])
+  @@index([userId, emailAddress])
+  @@index([syncStatus])
+}
+
+model Sender {
+  id                String            @id @default(cuid())
+  userId            String
+  emailAccountId    String
+  name              String?
+  email             String
+  domain            String
+  category          SenderCategory    @default(UNKNOWN)
+  trustScore        Int               @default(50)
+  riskLevel         RiskLevel         @default(LOW)
+  firstSeenAt       DateTime?
+  lastSeenAt        DateTime?
+  totalMessages     Int               @default(0)
+  unreadMessages    Int               @default(0)
+  isBlocked         Boolean           @default(false)
+  isTrusted         Boolean           @default(false)
+  identityStatus    IdentityStatus    @default(UNVERIFIED)
+  identityRiskLevel IdentityRiskLevel @default(LOW)
+  identityRiskScore Int               @default(0)
+  user              User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  emailAccount      EmailAccount      @relation(fields: [emailAccountId], references: [id], onDelete: Cascade)
+  messages          Message[]
+  alerts            SecurityAlert[]
+  unsubscribeJobs   UnsubscribeJob[]
+  createdAt         DateTime          @default(now())
+  updatedAt         DateTime          @updatedAt
+
+  @@unique([emailAccountId, email])
+  @@index([userId, category])
+  @@index([userId, riskLevel])
+  @@index([domain])
+}
+
+model Message {
+  id                  String            @id @default(cuid())
+  userId              String
+  emailAccountId      String
+  senderId            String?
+  providerMessageId   String
+  threadId            String?
+  subject             String?
+  snippet             String?           @db.Text
+  receivedAt          DateTime
+  category            SenderCategory    @default(UNKNOWN)
+  isRead              Boolean           @default(false)
+  labels              Json?
+  riskFlags           Json?
+  identityRiskScore   Int               @default(0)
+  identityRiskLevel   IdentityRiskLevel @default(LOW)
+  identityStatus      IdentityStatus    @default(UNVERIFIED)
+  identityEvidence    Json?
+  claimedBrand        String?           @db.VarChar(80)
+  authenticatedDomain String?           @db.VarChar(255)
+  replyToEmail        String?           @db.VarChar(320)
+  sizeBytes           Int?
+  hasAttachments      Boolean           @default(false)
+  isImportant         Boolean           @default(false)
+  listUnsubscribeUrl  String?           @db.Text
+  listUnsubscribePost Boolean           @default(false)
+  isArchived          Boolean           @default(false)
+  isTrashed           Boolean           @default(false)
+  user                User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  emailAccount        EmailAccount      @relation(fields: [emailAccountId], references: [id], onDelete: Cascade)
+  sender              Sender?           @relation(fields: [senderId], references: [id], onDelete: SetNull)
+  alerts              SecurityAlert[]
+  cleanupJobItems     CleanupJobItem[]
+  createdAt           DateTime          @default(now())
+
+  @@unique([emailAccountId, providerMessageId])
+  @@index([userId, receivedAt])
+  @@index([userId, category])
+  @@index([senderId])
+  @@index([isRead])
+  @@index([emailAccountId, isTrashed])
+  @@index([userId, isTrashed, isArchived, receivedAt])
+  @@index([userId, isRead, receivedAt])
+  @@index([userId, identityRiskLevel])
+  @@index([senderId, identityRiskScore])
+}
+
+model SecurityAlert {
+  id             String       @id @default(cuid())
+  userId         String
+  emailAccountId String
+  senderId       String?
+  messageId      String?
+  title          String
+  reason         String       @db.Text
+  riskLevel      RiskLevel
+  status         AlertStatus  @default(OPEN)
+  detectedAt     DateTime     @default(now())
+  resolvedAt     DateTime?
+  user           User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  emailAccount   EmailAccount @relation(fields: [emailAccountId], references: [id], onDelete: Cascade)
+  sender         Sender?      @relation(fields: [senderId], references: [id], onDelete: SetNull)
+  message        Message?     @relation(fields: [messageId], references: [id], onDelete: SetNull)
+
+  @@unique([messageId])
+  @@index([userId, status])
+  @@index([riskLevel])
+}
+
+model CleanupSuggestion {
+  id                  String          @id @default(cuid())
+  userId              String
+  emailAccountId      String
+  category            CleanupCategory
+  messageCount        Int
+  estimatedSpaceBytes Int             @default(0)
+  status              JobStatus       @default(QUEUED)
+  emailAccount        EmailAccount    @relation(fields: [emailAccountId], references: [id], onDelete: Cascade)
+  createdAt           DateTime        @default(now())
+
+  @@unique([emailAccountId, category])
+  @@index([userId, category])
+  @@index([emailAccountId])
+}
+
+model CleanupJob {
+  id                String           @id @default(cuid())
+  userId            String
+  emailAccountId    String
+  status            JobStatus        @default(QUEUED)
+  totalMessages     Int              @default(0)
+  processedMessages Int              @default(0)
+  failedMessages    Int              @default(0)
+  startedAt         DateTime?
+  completedAt       DateTime?
+  metadata          Json?
+  activeKey         String?          @unique @db.VarChar(191)
+  items             CleanupJobItem[]
+  user              User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  emailAccount      EmailAccount     @relation(fields: [emailAccountId], references: [id], onDelete: Cascade)
+  createdAt         DateTime         @default(now())
+  updatedAt         DateTime         @updatedAt
+
+  @@index([userId, status])
+}
+
+model CleanupJobItem {
+  id                String     @id @default(cuid())
+  cleanupJobId      String
+  messageId         String?
+  providerMessageId String     @db.VarChar(255)
+  sizeBytes         Int        @default(0)
+  status            String     @default("PENDING") @db.VarChar(20)
+  errorCode         String?    @db.VarChar(100)
+  processedAt       DateTime?
+  cleanupJob        CleanupJob @relation(fields: [cleanupJobId], references: [id], onDelete: Cascade)
+  message           Message?   @relation(fields: [messageId], references: [id], onDelete: SetNull)
+  createdAt         DateTime   @default(now())
+  updatedAt         DateTime   @updatedAt
+
+  @@unique([cleanupJobId, messageId])
+  @@index([cleanupJobId, status])
+  @@index([status, processedAt])
+}
+
+model CleanupPlan {
+  id                  String       @id @default(cuid())
+  userId              String
+  emailAccountId      String
+  categories          Json
+  messageIds          Json
+  totalMessages       Int
+  estimatedSpaceBytes Int          @default(0)
+  expiresAt           DateTime
+  consumedAt          DateTime?
+  user                User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  emailAccount        EmailAccount @relation(fields: [emailAccountId], references: [id], onDelete: Cascade)
+  createdAt           DateTime     @default(now())
+
+  @@index([userId, expiresAt])
+  @@index([emailAccountId, expiresAt])
+}
+
+model UnsubscribeJob {
+  id             String            @id @default(cuid())
+  userId         String
+  senderId       String
+  status         JobStatus         @default(QUEUED)
+  method         UnsubscribeMethod
+  unsubscribeUrl String?           @db.Text
+  metadata       Json?
+  operationKey   String?           @unique @db.VarChar(191)
+  createdAt      DateTime          @default(now())
+  completedAt    DateTime?
+  user           User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  sender         Sender            @relation(fields: [senderId], references: [id], onDelete: Cascade)
+
+  @@index([userId, status])
+}
+
+model AuditLog {
+  id         String   @id @default(cuid())
+  userId     String?
+  action     String
+  targetType String?
+  targetId   String?
+  metadata   Json?
+  ipAddress  String?
+  userAgent  String?
+  user       User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+  createdAt  DateTime @default(now())
+
+  @@index([userId, createdAt])
+  @@index([action])
+}
+
+model BackgroundJob {
+  id             String              @id @db.VarChar(191)
+  queue          String              @db.VarChar(40)
+  taskName       String              @db.VarChar(80)
+  payload        Json
+  status         BackgroundJobStatus @default(QUEUED)
+  attempts       Int                 @default(0)
+  maxAttempts    Int                 @default(1)
+  backoffMs      Int                 @default(0)
+  availableAt    DateTime            @default(now())
+  leaseOwner     String?             @db.VarChar(120)
+  leaseExpiresAt DateTime?
+  progress       Json?
+  result         Json?
+  lastError      String?             @db.Text
+  startedAt      DateTime?
+  completedAt    DateTime?
+  createdAt      DateTime            @default(now())
+  updatedAt      DateTime            @updatedAt
+
+  @@index([queue, status, availableAt])
+  @@index([status, leaseExpiresAt])
+  @@index([completedAt])
+}
+
+model ApiRateLimit {
+  key          String    @id @db.VarChar(191)
+  totalHits    Int       @default(0)
+  expiresAt    DateTime
+  blockedUntil DateTime?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  @@index([expiresAt])
+  @@index([blockedUntil])
+}

@@ -1,0 +1,179 @@
+name: Security and quality gates
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  schedule:
+    - cron: "17 3 * * 1"
+
+permissions:
+  contents: read
+  security-events: write
+
+env:
+  SBOM_RETENTION_DAYS: "30"
+  SYFT_VERSION: v1.42.3
+
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: server
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: server/package-lock.json
+      - run: npm ci
+      - run: npx prisma validate
+      - run: npx prisma generate
+      - run: npx prettier --check "src/**/*.ts"
+      - run: npx prisma validate
+      - run: npm run lint
+      - run: npm run build
+      - run: npm test -- --runInBand
+      - name: Generate backend application SBOM
+        run: |
+          npm sbom --package-lock-only --omit=dev --sbom-format=cyclonedx --sbom-type=application > backend-sbom.cdx.json
+          jq -e '.bomFormat == "CycloneDX" and ((.components // []) | length > 0)' backend-sbom.cdx.json
+          sha256sum backend-sbom.cdx.json > backend-sbom.cdx.json.sha256
+      - name: Upload backend application SBOM
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: backend-application-sbom-cyclonedx
+          path: |
+            server/backend-sbom.cdx.json
+            server/backend-sbom.cdx.json.sha256
+          if-no-files-found: error
+          retention-days: ${{ env.SBOM_RETENTION_DAYS }}
+      - run: npm audit --audit-level=high
+
+  flutter:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: senderwho
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+      - run: flutter pub get
+      - run: dart format --output=none --set-exit-if-changed lib test
+      - run: flutter analyze
+      - run: flutter test
+      - run: flutter build web --release --dart-define=SENDERWHO_API_URL=https://api.invalid.example/api/v1
+      - name: Install pinned Syft
+        id: flutter-syft
+        uses: anchore/sbom-action/download-syft@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
+        with:
+          syft-version: ${{ env.SYFT_VERSION }}
+      - name: Generate Flutter dependency SBOM
+        run: |
+          "${{ steps.flutter-syft.outputs.cmd }}" dir:. \
+            --source-name senderwho-flutter \
+            --source-version "${GITHUB_SHA}" \
+            --override-default-catalogers dart-pubspec-lock-cataloger \
+            --select-catalogers=-file \
+            --output cyclonedx-json=flutter-sbom.cdx.json
+          jq -e '.bomFormat == "CycloneDX" and (([.components[] | select((.purl // "") | startswith("pkg:pub/"))]) | length > 0)' flutter-sbom.cdx.json
+          sha256sum flutter-sbom.cdx.json > flutter-sbom.cdx.json.sha256
+      - name: Upload Flutter dependency SBOM
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: flutter-dependency-sbom-cyclonedx
+          path: |
+            senderwho/flutter-sbom.cdx.json
+            senderwho/flutter-sbom.cdx.json.sha256
+          if-no-files-found: error
+          retention-days: ${{ env.SBOM_RETENTION_DAYS }}
+
+  codeql:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: github/codeql-action/init@v3
+        with:
+          languages: javascript-typescript
+      - uses: github/codeql-action/analyze@v3
+
+  secret-sast-supply-chain:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - uses: aquasecurity/trivy-action@0.32.0
+        with:
+          scan-type: fs
+          scan-ref: .
+          scanners: vuln,secret,misconfig
+          severity: HIGH,CRITICAL
+          exit-code: "1"
+          format: sarif
+          output: trivy-results.sarif
+      - uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: trivy-results.sarif
+
+  container:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/build-push-action@v6
+        with:
+          context: server
+          load: true
+          tags: senderwho-api:ci
+      - name: Build one-shot migration image
+        uses: docker/build-push-action@v6
+        with:
+          context: server
+          target: migration
+          load: true
+          tags: senderwho-migrations:ci
+      - name: Install pinned Syft
+        id: container-syft
+        uses: anchore/sbom-action/download-syft@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
+        with:
+          syft-version: ${{ env.SYFT_VERSION }}
+      - name: Generate backend container SBOM
+        run: |
+          "${{ steps.container-syft.outputs.cmd }}" docker:senderwho-api:ci \
+            --source-name senderwho-api \
+            --source-version "${GITHUB_SHA}" \
+            --output cyclonedx-json=backend-container-sbom.cdx.json
+          jq -e '.bomFormat == "CycloneDX" and ((.components // []) | length > 0)' backend-container-sbom.cdx.json
+          sha256sum backend-container-sbom.cdx.json > backend-container-sbom.cdx.json.sha256
+      - name: Upload backend container SBOM
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: backend-container-sbom-cyclonedx
+          path: |
+            backend-container-sbom.cdx.json
+            backend-container-sbom.cdx.json.sha256
+          if-no-files-found: error
+          retention-days: ${{ env.SBOM_RETENTION_DAYS }}
+      - uses: aquasecurity/trivy-action@0.32.0
+        with:
+          image-ref: senderwho-api:ci
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          exit-code: "1"
+      - name: Scan migration image
+        uses: aquasecurity/trivy-action@0.32.0
+        with:
+          image-ref: senderwho-migrations:ci
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          exit-code: "1"

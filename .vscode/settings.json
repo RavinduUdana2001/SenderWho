@@ -1,0 +1,16 @@
+{
+  "typescript.tsdk": "server/node_modules/typescript/lib",
+  "typescript.enablePromptUseWorkspaceTsdk": true,
+  "files.exclude": {
+    "apps": true,
+    "server/dist": true,
+    "server/node_modules": true,
+    "senderwho/build": true
+  },
+  "search.exclude": {
+    "apps": true,
+    "server/dist": true,
+    "server/node_modules": true,
+    "senderwho/build": true
+  }
+}

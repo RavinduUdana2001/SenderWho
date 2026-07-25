@@ -1,0 +1,122 @@
+services:
+  mysql:
+    image: mysql:8.4
+    restart: unless-stopped
+    environment:
+      MYSQL_DATABASE: senderwho
+      MYSQL_USER: senderwho
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:?Set MYSQL_PASSWORD}
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:?Set MYSQL_ROOT_PASSWORD}
+    volumes:
+      - mysql_data:/var/lib/mysql
+    networks: [data]
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -uroot -p$$MYSQL_ROOT_PASSWORD --silent"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+    security_opt: ["no-new-privileges:true"]
+
+  migrate:
+    build:
+      context: ./server
+      dockerfile: Dockerfile
+      target: migration
+    image: senderwho-migrations:${SENDERWHO_IMAGE_TAG:-hostinger}
+    restart: "no"
+    read_only: true
+    init: true
+    user: node
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    tmpfs: ["/tmp:size=64m,noexec,nosuid,nodev"]
+    environment:
+      DATABASE_URL: mysql://senderwho:${MYSQL_PASSWORD}@mysql:3306/senderwho
+    networks: [data]
+    depends_on:
+      mysql:
+        condition: service_healthy
+
+  api:
+    build:
+      context: ./server
+      dockerfile: Dockerfile
+      target: runtime
+    image: senderwho-api:${SENDERWHO_IMAGE_TAG:-hostinger}
+    restart: unless-stopped
+    read_only: true
+    init: true
+    user: node
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    tmpfs: ["/tmp:size=64m,noexec,nosuid,nodev"]
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+      API_PREFIX: api/v1
+      CORS_ORIGINS: https://${API_DOMAIN:?Set API_DOMAIN}
+      MOCK_DATA_ENABLED: "false"
+      TRUST_PROXY_HOPS: 1
+      REQUEST_BODY_LIMIT: 256kb
+      SWAGGER_ENABLED: "false"
+      ALLOW_PRIVATE_DOCKER_DATA_SERVICES: "true"
+      DATABASE_URL: mysql://senderwho:${MYSQL_PASSWORD}@mysql:3306/senderwho
+      JWT_SECRET: ${JWT_SECRET:?Set JWT_SECRET}
+      JWT_EXPIRES_IN: 15m
+      REFRESH_TOKEN_EXPIRES_DAYS: 30
+      TOKEN_ENCRYPTION_KEYS: ${TOKEN_ENCRYPTION_KEYS:?Set TOKEN_ENCRYPTION_KEYS}
+      TOKEN_ENCRYPTION_ACTIVE_KEY_ID: ${TOKEN_ENCRYPTION_ACTIVE_KEY_ID:?Set TOKEN_ENCRYPTION_ACTIVE_KEY_ID}
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:?Set GOOGLE_CLIENT_ID}
+      GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:?Set GOOGLE_CLIENT_SECRET}
+      GOOGLE_OAUTH_CALLBACK_URL: https://${API_DOMAIN}/api/v1/auth/oauth/google/callback
+      YAHOO_CLIENT_ID: ${YAHOO_CLIENT_ID:-}
+      YAHOO_CLIENT_SECRET: ${YAHOO_CLIENT_SECRET:-}
+      YAHOO_OAUTH_CALLBACK_URL: https://${API_DOMAIN}/api/v1/auth/oauth/yahoo/callback
+      YAHOO_IMAP_HOST: imap.mail.yahoo.com
+      YAHOO_IMAP_PORT: 993
+      GMAIL_INITIAL_SYNC_MAX_MESSAGES: 500
+      GMAIL_SYNC_BATCH_SIZE: 20
+      GMAIL_SYNC_CONCURRENCY: 6
+      MESSAGE_RETENTION_DAYS: 365
+      AUDIT_RETENTION_DAYS: 365
+      JOB_RETENTION_DAYS: 90
+    networks: [web, data]
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/api/v1/health/ready',{headers:{'x-forwarded-proto':'https'}}).then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    environment:
+      API_DOMAIN: ${API_DOMAIN:?Set API_DOMAIN}
+    volumes:
+      - ./deploy/hostinger/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    networks: [web]
+    depends_on:
+      api:
+        condition: service_healthy
+    security_opt: ["no-new-privileges:true"]
+
+networks:
+  web:
+  data:
+    internal: true
+
+volumes:
+  mysql_data:
+  caddy_data:
+  caddy_config:

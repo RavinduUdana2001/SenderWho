@@ -1,0 +1,2 @@
+ALTER TABLE `EmailAccount`
+ADD COLUMN `metadataVersion` INTEGER NOT NULL DEFAULT 1;

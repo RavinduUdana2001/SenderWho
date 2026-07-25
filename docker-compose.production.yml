@@ -1,0 +1,52 @@
+services:
+  migrate:
+    build:
+      context: ./server
+      dockerfile: Dockerfile
+      target: migration
+    image: senderwho-migrations:${SENDERWHO_IMAGE_TAG:?Set SENDERWHO_IMAGE_TAG}
+    restart: "no"
+    read_only: true
+    init: true
+    user: node
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp:size=64m,noexec,nosuid,nodev
+    env_file:
+      - ${SENDERWHO_MIGRATION_ENV_FILE:-./server/.env.migration.production}
+
+  api:
+    build:
+      context: ./server
+      dockerfile: Dockerfile
+    image: senderwho-api:${SENDERWHO_IMAGE_TAG:?Set SENDERWHO_IMAGE_TAG}
+    restart: unless-stopped
+    read_only: true
+    init: true
+    user: node
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp:size=64m,noexec,nosuid,nodev
+    ports:
+      - "127.0.0.1:3000:3000"
+    env_file:
+      - ${SENDERWHO_API_ENV_FILE:-./server/.env.production}
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - "fetch('http://127.0.0.1:3000/api/v1/health/ready',{headers:{'x-forwarded-proto':'https'}}).then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
