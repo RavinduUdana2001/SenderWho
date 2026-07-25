@@ -19,7 +19,7 @@ import 'screens/privacy_security_screen.dart';
 import 'screens/profile_screen.dart';
 import 'screens/review_promotions_screen.dart';
 import 'screens/search_filter_screen.dart';
-import 'screens/security_alerts_screen.dart'; 
+import 'screens/security_alerts_screen.dart';
 import 'screens/sender_details_screen.dart';
 import 'screens/settings_screen.dart';
 import 'screens/top_senders_screen.dart';

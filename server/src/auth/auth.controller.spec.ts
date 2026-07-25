@@ -34,7 +34,9 @@ describe("AuthController OAuth browser result", () => {
     expect(page).toContain("&lt;script&gt;");
     expect(page).not.toContain('<script>alert("x")</script>');
     expect(page).toContain("Content-Security-Policy");
-    expect(page).toContain('window.location.replace("senderwho://oauth/callback');
+    expect(page).toContain(
+      'window.location.replace("senderwho://oauth/callback',
+    );
     expect(page).toContain("Opening SenderWho");
     expect(page).toContain("senderwho://oauth/callback?status=success");
   });

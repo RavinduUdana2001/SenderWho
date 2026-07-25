@@ -125,10 +125,7 @@ export class DatabaseJobRunner implements OnModuleInit, OnModuleDestroy {
     try {
       const result = await process(job);
       await this.jobs.complete(record.id, this.owner, result ?? {});
-      if (
-        record.queue === "scan-inbox" &&
-        isGmailContinuationResult(result)
-      ) {
+      if (record.queue === "scan-inbox" && isGmailContinuationResult(result)) {
         await this.jobs.add(
           "scan-inbox",
           "sync-gmail-account",

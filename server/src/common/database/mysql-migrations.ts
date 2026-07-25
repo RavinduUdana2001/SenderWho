@@ -8,7 +8,13 @@ const MIGRATION_LOCK = "senderwho_schema_migrations";
 export async function applyMysqlMigrations(): Promise<void> {
   if (!process.env.DATABASE_URL) throw new Error("DATABASE_URL is required.");
 
-  const migrationsPath = path.join(__dirname, "..", "..", "prisma", "migrations");
+  const migrationsPath = path.join(
+    __dirname,
+    "..",
+    "..",
+    "prisma",
+    "migrations",
+  );
   if (!existsSync(migrationsPath)) {
     throw new Error(`Packaged migrations are missing at ${migrationsPath}.`);
   }
@@ -17,12 +23,12 @@ export async function applyMysqlMigrations(): Promise<void> {
   console.log(JSON.stringify({ event: "database.connection.starting" }));
   let lockAcquired = false;
   try {
-    const lockRows = await prisma.$queryRawUnsafe<Array<{ acquired: bigint | number }>>(
-      "SELECT GET_LOCK(?, 30) AS acquired",
-      MIGRATION_LOCK,
-    );
+    const lockRows = await prisma.$queryRawUnsafe<
+      Array<{ acquired: bigint | number }>
+    >("SELECT GET_LOCK(?, 30) AS acquired", MIGRATION_LOCK);
     lockAcquired = Number(lockRows[0]?.acquired) === 1;
-    if (!lockAcquired) throw new Error("Timed out waiting for the database migration lock.");
+    if (!lockAcquired)
+      throw new Error("Timed out waiting for the database migration lock.");
 
     await prisma.$executeRawUnsafe(`
       CREATE TABLE IF NOT EXISTS \`_senderwho_migrations\` (
@@ -62,7 +68,9 @@ export async function applyMysqlMigrations(): Promise<void> {
         name,
         checksum,
       );
-      console.log(JSON.stringify({ event: "database.migration.applied", name }));
+      console.log(
+        JSON.stringify({ event: "database.migration.applied", name }),
+      );
     }
   } finally {
     if (lockAcquired) {

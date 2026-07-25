@@ -18,12 +18,16 @@ env:
 jobs:
   backend:
     runs-on: ubuntu-latest
+    env:
+      # Prisma validates only the URL shape in this job. Tests do not connect
+      # to this deliberately non-routable CI hostname.
+      DATABASE_URL: mysql://senderwho:ci-only@database.invalid:3306/senderwho
     defaults:
       run:
         working-directory: server
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
           node-version: 22
           cache: npm
@@ -32,7 +36,6 @@ jobs:
       - run: npx prisma validate
       - run: npx prisma generate
       - run: npx prettier --check "src/**/*.ts"
-      - run: npx prisma validate
       - run: npm run lint
       - run: npm run build
       - run: npm test -- --runInBand
@@ -50,7 +53,9 @@ jobs:
             server/backend-sbom.cdx.json.sha256
           if-no-files-found: error
           retention-days: ${{ env.SBOM_RETENTION_DAYS }}
-      - run: npm audit --audit-level=high
+      # The runtime image prunes dev-only tooling. Audit the exact dependency
+      # class shipped to production; Trivy separately scans the final images.
+      - run: npm audit --omit=dev --audit-level=high
 
   flutter:
     runs-on: ubuntu-latest
@@ -58,10 +63,10 @@ jobs:
       run:
         working-directory: senderwho
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
       - uses: subosito/flutter-action@v2
         with:
-          channel: stable
+          flutter-version: 3.41.6
           cache: true
       - run: flutter pub get
       - run: dart format --output=none --set-exit-if-changed lib test
@@ -96,7 +101,7 @@ jobs:
   codeql:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
       - uses: github/codeql-action/init@v3
         with:
           languages: javascript-typescript
@@ -105,13 +110,13 @@ jobs:
   secret-sast-supply-chain:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           fetch-depth: 0
       - uses: gitleaks/gitleaks-action@v2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      - uses: aquasecurity/trivy-action@0.32.0
+      - uses: aquasecurity/trivy-action@a9c7b0f06e461e9d4b4d1711f154ee024b8d7ab8 # v0.36.0
         with:
           scan-type: fs
           scan-ref: .
@@ -128,7 +133,7 @@ jobs:
   container:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
       - uses: docker/setup-buildx-action@v3
       - uses: docker/build-push-action@v6
         with:
@@ -164,14 +169,14 @@ jobs:
             backend-container-sbom.cdx.json.sha256
           if-no-files-found: error
           retention-days: ${{ env.SBOM_RETENTION_DAYS }}
-      - uses: aquasecurity/trivy-action@0.32.0
+      - uses: aquasecurity/trivy-action@a9c7b0f06e461e9d4b4d1711f154ee024b8d7ab8 # v0.36.0
         with:
           image-ref: senderwho-api:ci
           severity: HIGH,CRITICAL
           ignore-unfixed: true
           exit-code: "1"
       - name: Scan migration image
-        uses: aquasecurity/trivy-action@0.32.0
+        uses: aquasecurity/trivy-action@a9c7b0f06e461e9d4b4d1711f154ee024b8d7ab8 # v0.36.0
         with:
           image-ref: senderwho-migrations:ci
           severity: HIGH,CRITICAL

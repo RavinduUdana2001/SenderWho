@@ -127,7 +127,9 @@ void bootstrap().catch((error: unknown) => {
       }),
     );
   }
-  console.error(JSON.stringify({ event: "application.startup_failed", ...details }));
+  console.error(
+    JSON.stringify({ event: "application.startup_failed", ...details }),
+  );
   process.exit(1);
 });
 
@@ -178,7 +180,11 @@ async function checkDatabaseTcpConnection(): Promise<void> {
     const socket = createConnection({ host, port });
     const timeout = setTimeout(() => {
       socket.destroy();
-      reject(new Error(`Timed out connecting to MySQL TCP endpoint ${host}:${port}.`));
+      reject(
+        new Error(
+          `Timed out connecting to MySQL TCP endpoint ${host}:${port}.`,
+        ),
+      );
     }, 5000);
     socket.once("connect", () => {
       clearTimeout(timeout);
