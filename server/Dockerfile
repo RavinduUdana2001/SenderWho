@@ -16,6 +16,7 @@ FROM dependencies AS builder
 COPY prisma ./prisma
 RUN ./node_modules/.bin/prisma generate
 COPY tsconfig.json ./
+COPY scripts ./scripts
 COPY src ./src
 RUN npm run build
 
