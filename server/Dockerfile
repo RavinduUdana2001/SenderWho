@@ -38,6 +38,9 @@ COPY --from=dependencies --chown=node:node /app/package.json /app/package-lock.j
 COPY --from=dependencies --chown=node:node /app/node_modules ./node_modules
 COPY --chown=node:node prisma ./prisma
 RUN ./node_modules/.bin/prisma version
+# npm is build tooling and is not needed by the one-shot migration process.
+# Excluding it also keeps npm's unrelated dependency tree out of production.
+RUN rm -rf /usr/local/lib/node_modules/npm /usr/local/bin/npm /usr/local/bin/npx
 USER node
 ENTRYPOINT ["./node_modules/.bin/prisma"]
 CMD ["migrate", "deploy"]
@@ -49,6 +52,8 @@ COPY --from=production-dependencies --chown=node:node /app/package.json ./packag
 COPY --from=production-dependencies --chown=node:node /app/node_modules ./node_modules
 COPY --from=builder --chown=node:node /app/prisma ./prisma
 COPY --from=builder --chown=node:node /app/dist ./dist
+# The API runs directly with Node. Do not ship npm and its build-only packages.
+RUN rm -rf /usr/local/lib/node_modules/npm /usr/local/bin/npm /usr/local/bin/npx
 USER node
 EXPOSE 3000
 HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
