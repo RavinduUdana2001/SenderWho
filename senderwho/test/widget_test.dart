@@ -1175,6 +1175,76 @@ void main() {
     expect(senderName.style?.fontFamily, header.style?.fontFamily);
   });
 
+  testWidgets('Top sender details can persist a trusted sender', (
+    tester,
+  ) async {
+    await setScreenSize(tester, const Size(390, 844));
+    var detailLoads = 0;
+    var trustCalls = 0;
+    final repository = SenderWhoRepository(
+      previewMode: false,
+      client: MockClient((request) async {
+        if (request.method == 'GET' &&
+            request.url.path == '/api/v1/senders/sender-1') {
+          detailLoads += 1;
+          return http.Response(
+            jsonEncode({
+              'id': 'sender-1',
+              'name': 'Top Newsletter',
+              'email': 'news@example.test',
+              'category': 'NEWSLETTER',
+              'score': 72,
+              'initial': 'T',
+              'colorKey': 'primary',
+              'totalMessages': 20,
+              'unreadMessages': 2,
+              'isTrusted': detailLoads > 1,
+              'isBlocked': false,
+              'firstSeenAt': '2026-07-01T00:00:00.000Z',
+              'location': 'Unknown',
+              'type': 'NEWSLETTER',
+              'messages': <Object>[],
+            }),
+            200,
+          );
+        }
+        if (request.method == 'PATCH' &&
+            request.url.path == '/api/v1/senders/sender-1/trust') {
+          trustCalls += 1;
+          expect(jsonDecode(request.body), {'trusted': true});
+          return http.Response(
+            jsonEncode({
+              'id': 'sender-1',
+              'isTrusted': true,
+              'isBlocked': false,
+            }),
+            200,
+          );
+        }
+        return http.Response('Not found', 404);
+      }),
+      sessionStore: MemorySessionStore(),
+      baseUrl: 'https://api.example.test/api/v1',
+    );
+
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: AppTheme.light(),
+        home: SenderDetailsScreen(repository: repository, senderId: 'sender-1'),
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(find.text('Trust sender'), findsOneWidget);
+
+    await tester.tap(find.text('Trust sender'));
+    await tester.pumpAndSettle();
+
+    expect(trustCalls, 1);
+    expect(detailLoads, 2);
+    expect(find.text('Untrust'), findsOneWidget);
+    expect(find.text('Top Newsletter is now trusted.'), findsOneWidget);
+  });
+
   testWidgets('Tapping a real email card opens subject and Gmail body', (
     tester,
   ) async {

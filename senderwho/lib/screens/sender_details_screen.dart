@@ -105,7 +105,14 @@ class _SenderDetailsScreenState extends State<SenderDetailsScreen> {
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         content: Text(
-          succeeded ? 'Sender preference updated.' : 'Could not update sender.',
+          succeeded
+              ? trusted == true
+                    ? '${sender.name} is now trusted.'
+                    : trusted == false
+                    ? '${sender.name} is no longer trusted.'
+                    : 'Sender preference updated.'
+              : _repository.lastError ??
+                    'Could not update this sender. Please try again.',
         ),
       ),
     );

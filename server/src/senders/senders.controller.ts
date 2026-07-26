@@ -39,7 +39,6 @@ export class SendersController {
   }
 
   @Patch(":id/trust")
-  @RequireRecentAuth()
   @Idempotent("sender.trust")
   @Throttle({ default: { limit: 15, ttl: 60_000, blockDuration: 60_000 } })
   trust(
