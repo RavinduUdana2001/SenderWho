@@ -7,11 +7,15 @@ import {
   mockSenders,
 } from "../common/mock/senderwho.mock";
 import { PrismaService } from "../database/prisma.service";
+import { InboxHealthService } from "../inbox-health/inbox-health.service";
 import { getGoogleAccountRecoveryAction } from "../providers/google-account-recovery";
 
 @Injectable()
 export class DashboardService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly inboxHealthService: InboxHealthService,
+  ) {}
 
   async getDashboardSummary(userId: string) {
     if (this.prisma.mockDataEnabled) {
@@ -35,13 +39,13 @@ export class DashboardService {
       newsletters,
       promotions,
       spam,
-      riskySenders,
       topSenders,
       recentAlerts,
       openAlertCount,
       latestAccount,
       cleanupOpportunity,
       unsubscribeSenders,
+      inboxHealth,
     ] = await Promise.all([
       this.prisma.sender.count({ where: { userId } }),
       this.prisma.message.count({ where: { userId, isTrashed: false } }),
@@ -64,9 +68,6 @@ export class DashboardService {
       }),
       this.prisma.message.count({
         where: { userId, isTrashed: false, category: "SPAM" },
-      }),
-      this.prisma.sender.count({
-        where: { userId, riskLevel: { in: ["HIGH", "CRITICAL"] } },
       }),
       this.prisma.sender.findMany({
         where: { userId },
@@ -119,36 +120,13 @@ export class DashboardService {
           unsubscribeJobs: { none: { status: "COMPLETED" } },
         },
       }),
+      this.inboxHealthService.getHealth(userId),
     ]);
-
-    const unreadRatio = totalMessages === 0 ? 0 : unreadEmails / totalMessages;
-    const spamRatio = totalMessages === 0 ? 0 : spam / totalMessages;
-    const riskyRatio = totalSenders === 0 ? 0 : riskySenders / totalSenders;
-    const healthScore =
-      totalMessages === 0
-        ? 0
-        : Math.max(
-            0,
-            Math.min(
-              100,
-              Math.round(
-                100 - unreadRatio * 20 - spamRatio * 40 - riskyRatio * 40,
-              ),
-            ),
-          );
-    const healthStatus =
-      totalMessages === 0
-        ? "Waiting for scan"
-        : healthScore >= 80
-          ? "Good"
-          : healthScore >= 60
-            ? "Needs attention"
-            : "At risk";
 
     return {
       inboxHealth: {
-        score: healthScore,
-        status: healthStatus,
+        score: inboxHealth.score,
+        status: inboxHealth.status,
       },
       metrics: {
         totalMessages,

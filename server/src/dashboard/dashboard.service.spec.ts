@@ -29,7 +29,14 @@ describe("DashboardService", () => {
         }),
       },
     };
-    const service = new DashboardService(prisma as never);
+    const inboxHealth = {
+      getHealth: jest.fn().mockResolvedValue({
+        score: 0,
+        status: "Waiting for scan",
+        breakdown: [],
+      }),
+    };
+    const service = new DashboardService(prisma as never, inboxHealth as never);
 
     await expect(
       service.getDashboardSummary("test-user"),
@@ -73,6 +80,45 @@ describe("DashboardService", () => {
       },
       _count: { _all: true },
       _sum: { sizeBytes: true },
+    });
+    expect(inboxHealth.getHealth).toHaveBeenCalledWith("test-user");
+  });
+
+  it("uses the exact live score returned by the Inbox Health service", async () => {
+    const prisma = {
+      mockDataEnabled: false,
+      sender: {
+        count: jest.fn().mockResolvedValue(0),
+        findMany: jest.fn().mockResolvedValue([]),
+      },
+      message: {
+        count: jest.fn().mockResolvedValue(0),
+        aggregate: jest.fn().mockResolvedValue({
+          _count: { _all: 0 },
+          _sum: { sizeBytes: null },
+        }),
+      },
+      securityAlert: {
+        findMany: jest.fn().mockResolvedValue([]),
+        count: jest.fn().mockResolvedValue(0),
+      },
+      emailAccount: {
+        findFirst: jest.fn().mockResolvedValue(null),
+      },
+    };
+    const inboxHealth = {
+      getHealth: jest.fn().mockResolvedValue({
+        score: 87,
+        status: "Good",
+        breakdown: [],
+      }),
+    };
+    const service = new DashboardService(prisma as never, inboxHealth as never);
+
+    await expect(
+      service.getDashboardSummary("test-user"),
+    ).resolves.toMatchObject({
+      inboxHealth: { score: 87, status: "Good" },
     });
   });
 });
