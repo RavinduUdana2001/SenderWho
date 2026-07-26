@@ -36,6 +36,7 @@ import 'package:sender_who/services/senderwho_repository.dart';
 import 'package:sender_who/theme/app_colors.dart';
 import 'package:sender_who/theme/app_theme.dart';
 import 'package:sender_who/widgets/app_card.dart';
+import 'package:sender_who/widgets/search_box.dart';
 import 'package:sender_who/widgets/sender_drawer.dart';
 import 'package:sender_who/widgets/section_title.dart';
 
@@ -1507,6 +1508,40 @@ void main() {
       expect(pageTwoAttempts, 2);
       expect(find.text('Already loaded message'), findsOneWidget);
       expect(find.text('Retried message'), findsOneWidget);
+    },
+  );
+
+  testWidgets(
+    'All Senders page-level error spans the compact phone content width',
+    (tester) async {
+      await setScreenSize(tester, const Size(390, 844));
+      final repository = SenderWhoRepository(
+        previewMode: false,
+        client: MockClient(
+          (_) async => http.Response(
+            jsonEncode({'message': 'Service temporarily unavailable'}),
+            503,
+          ),
+        ),
+        sessionStore: MemorySessionStore(),
+        baseUrl: 'https://api.example.test/api/v1',
+      );
+
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: AppTheme.dark(),
+          home: AllSendersScreen(repository: repository),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      final errorRect = tester.getRect(
+        find.byKey(const ValueKey('all-senders-error-state')),
+      );
+      final searchRect = tester.getRect(find.byType(SearchBox));
+      expect(find.text('Could not load senders.'), findsOneWidget);
+      expect(errorRect.width, closeTo(searchRect.width, 0.1));
+      expect(errorRect.left, closeTo(searchRect.left, 0.1));
     },
   );
 

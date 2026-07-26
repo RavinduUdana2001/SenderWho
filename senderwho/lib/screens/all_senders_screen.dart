@@ -169,53 +169,68 @@ class _AllSendersScreenState extends State<AllSendersScreen> {
           if (_loading && _senders.isEmpty)
             const _SenderListSkeleton()
           else if (_error != null)
-            AppCard(
-              padding: const EdgeInsets.all(24),
-              child: Column(
-                children: [
-                  Icon(
-                    Icons.people_outline_rounded,
-                    size: 34,
-                    color: AppColors.mutedFor(context),
-                  ),
-                  const SizedBox(height: 12),
-                  Text(_error!, textAlign: TextAlign.center),
-                  const SizedBox(height: 10),
-                  FilledButton.tonal(
-                    onPressed: () => _load(reset: true),
-                    child: const Text('Try again'),
-                  ),
-                ],
+            SizedBox(
+              key: const ValueKey('all-senders-error-state'),
+              width: double.infinity,
+              child: AppCard(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 24,
+                  vertical: 30,
+                ),
+                child: Column(
+                  children: [
+                    Icon(
+                      Icons.people_outline_rounded,
+                      size: 34,
+                      color: AppColors.mutedFor(context),
+                    ),
+                    const SizedBox(height: 12),
+                    Text(_error!, textAlign: TextAlign.center),
+                    const SizedBox(height: 10),
+                    FilledButton.tonal(
+                      onPressed: () => _load(reset: true),
+                      child: const Text('Try again'),
+                    ),
+                  ],
+                ),
               ),
             )
           else if (_senders.isEmpty)
-            AppCard(
-              padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 36),
-              child: Column(
-                children: [
-                  Container(
-                    width: 56,
-                    height: 56,
-                    decoration: BoxDecoration(
-                      color: AppColors.softFill(context, AppColors.primary),
-                      borderRadius: BorderRadius.circular(18),
+            SizedBox(
+              key: const ValueKey('all-senders-empty-state'),
+              width: double.infinity,
+              child: AppCard(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 24,
+                  vertical: 36,
+                ),
+                child: Column(
+                  children: [
+                    Container(
+                      width: 56,
+                      height: 56,
+                      decoration: BoxDecoration(
+                        color: AppColors.softFill(context, AppColors.primary),
+                        borderRadius: BorderRadius.circular(18),
+                      ),
+                      child: const Icon(
+                        Icons.person_search_rounded,
+                        color: AppColors.primary,
+                      ),
                     ),
-                    child: const Icon(
-                      Icons.person_search_rounded,
-                      color: AppColors.primary,
+                    const SizedBox(height: 14),
+                    Text(
+                      'No matching senders',
+                      style: Theme.of(context).textTheme.titleMedium,
                     ),
-                  ),
-                  const SizedBox(height: 14),
-                  Text(
-                    'No matching senders',
-                    style: Theme.of(context).textTheme.titleMedium,
-                  ),
-                  const SizedBox(height: 5),
-                  Text(
-                    'Try another sender type or search term.',
-                    style: Theme.of(context).textTheme.bodyMedium,
-                  ),
-                ],
+                    const SizedBox(height: 5),
+                    Text(
+                      'Try another sender type or search term.',
+                      textAlign: TextAlign.center,
+                      style: Theme.of(context).textTheme.bodyMedium,
+                    ),
+                  ],
+                ),
               ),
             )
           else
