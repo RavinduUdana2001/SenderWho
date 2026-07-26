@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
@@ -35,6 +36,7 @@ import 'package:sender_who/services/senderwho_repository.dart';
 import 'package:sender_who/theme/app_colors.dart';
 import 'package:sender_who/theme/app_theme.dart';
 import 'package:sender_who/widgets/app_card.dart';
+import 'package:sender_who/widgets/sender_drawer.dart';
 import 'package:sender_who/widgets/section_title.dart';
 
 void main() {
@@ -2458,5 +2460,47 @@ void main() {
     await tester.tap(find.text('Cancel'));
     await tester.pumpAndSettle();
     expect(find.text('Sign out of SenderWho?'), findsNothing);
+  });
+
+  testWidgets('Sign out shows progress and prevents duplicate requests', (
+    tester,
+  ) async {
+    await setScreenSize(tester, const Size(390, 844));
+    final completion = Completer<void>();
+    var signOutCalls = 0;
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          appBar: AppBar(),
+          drawer: SenderDrawer(
+            onSignOut: () {
+              signOutCalls += 1;
+              return completion.future;
+            },
+          ),
+        ),
+      ),
+    );
+
+    await tester.tap(find.byTooltip('Open navigation menu'));
+    await tester.pumpAndSettle();
+    await tester.ensureVisible(find.text('Sign out'));
+    await tester.tap(find.text('Sign out'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.widgetWithText(FilledButton, 'Sign out'));
+    await tester.pump();
+
+    expect(signOutCalls, 1);
+    expect(find.text('Signing out…'), findsOneWidget);
+    expect(find.byKey(const ValueKey('sign-out-loader')), findsOneWidget);
+
+    await tester.tap(find.byKey(const ValueKey('drawer-sign-out')));
+    await tester.pump();
+    expect(signOutCalls, 1);
+
+    completion.complete();
+    await tester.pumpAndSettle();
+    expect(find.text('Signing out…'), findsNothing);
   });
 }

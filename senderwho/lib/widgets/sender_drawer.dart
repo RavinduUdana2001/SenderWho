@@ -19,7 +19,9 @@ import '../theme/theme_mode_controller.dart';
 import 'senderwho_brand.dart';
 
 class SenderDrawer extends StatelessWidget {
-  const SenderDrawer({super.key});
+  const SenderDrawer({super.key, this.onSignOut});
+
+  final Future<void> Function()? onSignOut;
 
   static const _items = [
     NavItem(
@@ -177,54 +179,96 @@ class SenderDrawer extends StatelessWidget {
                     ),
                   ),
                 ),
-                ListTile(
-                  dense: true,
-                  contentPadding: const EdgeInsets.symmetric(horizontal: 12),
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(14),
-                  ),
-                  leading: const Icon(
-                    Icons.logout_rounded,
-                    color: AppColors.danger,
-                    size: 20,
-                  ),
-                  title: Text(
-                    'Sign out',
-                    style: Theme.of(
-                      context,
-                    ).textTheme.titleSmall?.copyWith(color: AppColors.danger),
-                  ),
-                  onTap: () async {
-                    final confirmed = await showDialog<bool>(
-                      context: context,
-                      builder: (dialogContext) => AlertDialog(
-                        title: const Text('Sign out of SenderWho?'),
-                        content: const Text(
-                          'This signs out this device only. Your email connection stays linked, so returning users normally will not need to grant access again.',
-                        ),
-                        actions: [
-                          TextButton(
-                            onPressed: () =>
-                                Navigator.pop(dialogContext, false),
-                            child: const Text('Cancel'),
-                          ),
-                          FilledButton(
-                            onPressed: () => Navigator.pop(dialogContext, true),
-                            child: const Text('Sign out'),
-                          ),
-                        ],
-                      ),
-                    );
-                    if (confirmed == true) {
-                      await senderWhoRepository.logout();
-                    }
-                  },
+                _SignOutTile(
+                  onSignOut: onSignOut ?? senderWhoRepository.logout,
                 ),
               ],
             ),
           ),
         ),
       ),
+    );
+  }
+}
+
+class _SignOutTile extends StatefulWidget {
+  const _SignOutTile({required this.onSignOut});
+
+  final Future<void> Function() onSignOut;
+
+  @override
+  State<_SignOutTile> createState() => _SignOutTileState();
+}
+
+class _SignOutTileState extends State<_SignOutTile> {
+  bool _signingOut = false;
+
+  Future<void> _signOut() async {
+    if (_signingOut) return;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Sign out of SenderWho?'),
+        content: const Text(
+          'This signs out this device only. Your email connection stays linked, so returning users normally will not need to grant access again.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(dialogContext, true),
+            style: FilledButton.styleFrom(backgroundColor: AppColors.danger),
+            child: const Text('Sign out'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+
+    setState(() => _signingOut = true);
+    try {
+      await widget.onSignOut();
+    } finally {
+      if (mounted) setState(() => _signingOut = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return ListTile(
+      key: const ValueKey('drawer-sign-out'),
+      enabled: !_signingOut,
+      dense: true,
+      contentPadding: const EdgeInsets.symmetric(horizontal: 12),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+      leading: AnimatedSwitcher(
+        duration: const Duration(milliseconds: 180),
+        child: _signingOut
+            ? const SizedBox.square(
+                key: ValueKey('sign-out-loader'),
+                dimension: 20,
+                child: CircularProgressIndicator(strokeWidth: 2.2),
+              )
+            : const Icon(
+                Icons.logout_rounded,
+                key: ValueKey('sign-out-icon'),
+                color: AppColors.danger,
+                size: 20,
+              ),
+      ),
+      title: AnimatedSwitcher(
+        duration: const Duration(milliseconds: 180),
+        child: Text(
+          _signingOut ? 'Signing out…' : 'Sign out',
+          key: ValueKey(_signingOut ? 'signing-out-label' : 'sign-out-label'),
+          style: Theme.of(context).textTheme.titleSmall?.copyWith(
+            color: _signingOut ? AppColors.mutedFor(context) : AppColors.danger,
+          ),
+        ),
+      ),
+      onTap: _signingOut ? null : _signOut,
     );
   }
 }
