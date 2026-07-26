@@ -18,7 +18,6 @@ import { RefreshSessionDto } from "./dto/refresh-session.dto";
 import { StartOAuthDto } from "./dto/start-oauth.dto";
 import { Public } from "./public.decorator";
 import { AuthService, SessionContext } from "./auth.service";
-import { RequireRecentAuth } from "./require-recent-auth.decorator";
 import { Idempotent } from "../common/security/idempotent.decorator";
 import { ConnectYahooImapDto } from "./dto/connect-yahoo-imap.dto";
 
@@ -206,7 +205,6 @@ export class AuthController {
   }
 
   @Delete("sessions/:id")
-  @RequireRecentAuth()
   @Idempotent("auth.session.revoke")
   revokeSession(
     @CurrentUser("id") userId: string,
@@ -217,7 +215,6 @@ export class AuthController {
   }
 
   @Post("sessions/revoke-all")
-  @RequireRecentAuth()
   @Idempotent("auth.sessions.revoke-all")
   revokeAllSessions(@CurrentUser("id") userId: string) {
     return this.authService.revokeAllSessions(userId);

@@ -10,7 +10,6 @@ export class UsersController {
   constructor(private readonly usersService: UsersService) {}
 
   @Get("export")
-  @RequireRecentAuth()
   @Throttle({ default: { limit: 10, ttl: 60_000, blockDuration: 60_000 } })
   exportData(
     @CurrentUser("id") userId: string,

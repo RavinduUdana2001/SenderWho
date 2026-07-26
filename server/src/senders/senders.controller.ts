@@ -1,6 +1,5 @@
 import { Body, Controller, Get, Param, Patch, Query } from "@nestjs/common";
 import { CurrentUser } from "../auth/current-user.decorator";
-import { RequireRecentAuth } from "../auth/require-recent-auth.decorator";
 import { Throttle } from "@nestjs/throttler";
 import { Idempotent } from "../common/security/idempotent.decorator";
 import { ListSendersDto } from "./dto/list-senders.dto";
@@ -27,7 +26,6 @@ export class SendersController {
   }
 
   @Patch(":id/block")
-  @RequireRecentAuth()
   @Idempotent("sender.block")
   @Throttle({ default: { limit: 15, ttl: 60_000, blockDuration: 60_000 } })
   block(

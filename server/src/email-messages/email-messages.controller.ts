@@ -1,6 +1,5 @@
 import { Body, Controller, Get, Param, Post, Query } from "@nestjs/common";
 import { CurrentUser } from "../auth/current-user.decorator";
-import { RequireRecentAuth } from "../auth/require-recent-auth.decorator";
 import { Throttle } from "@nestjs/throttler";
 import { Idempotent } from "../common/security/idempotent.decorator";
 import { BulkMessageActionDto } from "./dto/bulk-message-action.dto";
@@ -72,7 +71,6 @@ export class EmailMessagesController {
   }
 
   @Post("actions/trash")
-  @RequireRecentAuth()
   @Idempotent("email.trash")
   @Throttle({ default: { limit: 10, ttl: 60_000, blockDuration: 120_000 } })
   trash(@CurrentUser("id") userId: string, @Body() body: BulkMessageActionDto) {

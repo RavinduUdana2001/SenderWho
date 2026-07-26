@@ -1,6 +1,5 @@
 import { Body, Controller, Get, Param, Post } from "@nestjs/common";
 import { CurrentUser } from "../auth/current-user.decorator";
-import { RequireRecentAuth } from "../auth/require-recent-auth.decorator";
 import { Throttle } from "@nestjs/throttler";
 import { Idempotent } from "../common/security/idempotent.decorator";
 import { CleanupService } from "./cleanup.service";
@@ -17,7 +16,6 @@ export class CleanupController {
   }
 
   @Post("jobs")
-  @RequireRecentAuth()
   @Idempotent("cleanup.create")
   @Throttle({ default: { limit: 5, ttl: 60_000, blockDuration: 120_000 } })
   createJob(

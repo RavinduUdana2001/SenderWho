@@ -172,8 +172,8 @@ iOS Keychain/Android Keystore. Every data and mutation endpoint requires the
 access JWT and scopes its query to that user's ID. Expired Google access tokens
 are refreshed server-side and encrypted again before Gmail API work continues.
 
-The app refresh session uses a 90-day sliding expiry. Each valid refresh rotates
-the token atomically, revokes the previous token, and issues a new 90-day token.
+The app refresh session uses a 365-day sliding expiry. Each valid refresh rotates
+the token atomically, revokes the previous token, and issues a new 365-day token.
 Normal app restarts therefore restore the session without opening Google again.
 **Sign out** revokes only the current SenderWho app session; it intentionally
 keeps the encrypted Gmail connection so a returning user can select their Google
@@ -299,7 +299,7 @@ http://localhost:3000/api/v1/docs
   `TOKEN_ENCRYPTION_KEY`.
 - Full email body content is not downloaded or stored.
 - App refresh tokens are random, hashed in MySQL, rotated on every use, and
-  revocable on logout. Their sliding expiry is 90 days by default; access JWTs
+  revocable on logout. Their sliding expiry is 365 days by default; access JWTs
   expire after 15 minutes by default.
 - All non-public API endpoints require authentication and enforce per-user
   ownership before reads or Gmail mutations.

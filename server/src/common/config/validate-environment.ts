@@ -183,10 +183,14 @@ export function validateEnvironment(environment: Environment): Environment {
         "JWT_EXPIRES_IN must be a positive duration no longer than 15 minutes in production.",
       );
     }
-    const refreshDays = Number(environment.REFRESH_TOKEN_EXPIRES_DAYS ?? 90);
-    if (!Number.isInteger(refreshDays) || refreshDays < 1 || refreshDays > 90) {
+    const refreshDays = Number(environment.REFRESH_TOKEN_EXPIRES_DAYS ?? 365);
+    if (
+      !Number.isInteger(refreshDays) ||
+      refreshDays < 1 ||
+      refreshDays > 365
+    ) {
       throw new Error(
-        "REFRESH_TOKEN_EXPIRES_DAYS must be between 1 and 90 in production.",
+        "REFRESH_TOKEN_EXPIRES_DAYS must be between 1 and 365 in production.",
       );
     }
     const requestBodyBytes = byteSize(

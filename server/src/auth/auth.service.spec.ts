@@ -291,7 +291,7 @@ describe("AuthService", () => {
         .mockImplementation((callback) => callback(transaction)),
     } as unknown as PrismaService;
     const sessionService = new AuthService(
-      new ConfigService({ auth: { refreshTokenDays: 90 } }),
+      new ConfigService({ auth: { refreshTokenDays: 365 } }),
       new JwtService({ secret: "a-test-secret-that-is-long-enough" }),
       prisma,
       {} as GmailClient,
@@ -318,8 +318,8 @@ describe("AuthService", () => {
     const remainingDays =
       (createCall.data.expiresAt.getTime() - Date.now()) /
       (24 * 60 * 60 * 1_000);
-    expect(remainingDays).toBeGreaterThan(89.9);
-    expect(remainingDays).toBeLessThanOrEqual(90);
+    expect(remainingDays).toBeGreaterThan(364.9);
+    expect(remainingDays).toBeLessThanOrEqual(365);
   });
 
   it("rejects a refresh token that loses the atomic rotation race", async () => {

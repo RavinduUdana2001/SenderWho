@@ -18,7 +18,7 @@ export default () => ({
   auth: {
     jwtSecret: process.env.JWT_SECRET,
     jwtExpiresIn: process.env.JWT_EXPIRES_IN ?? "15m",
-    refreshTokenDays: Number(process.env.REFRESH_TOKEN_EXPIRES_DAYS ?? 90),
+    refreshTokenDays: Number(process.env.REFRESH_TOKEN_EXPIRES_DAYS ?? 365),
     tokenEncryptionKey: process.env.TOKEN_ENCRYPTION_KEY,
     tokenEncryptionKeys: process.env.TOKEN_ENCRYPTION_KEYS,
     tokenEncryptionActiveKeyId: process.env.TOKEN_ENCRYPTION_ACTIVE_KEY_ID,

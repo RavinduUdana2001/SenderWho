@@ -12,12 +12,12 @@ describe("SendersController authentication policy", () => {
     ).toBeUndefined();
   });
 
-  it("keeps recent authentication protection on blocking", () => {
+  it("allows blocking with the existing valid app session", () => {
     expect(
       Reflect.getMetadata(
         RECENT_AUTH_MAX_AGE_SECONDS_KEY,
         SendersController.prototype.block,
       ),
-    ).toBe(10 * 60);
+    ).toBeUndefined();
   });
 });

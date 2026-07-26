@@ -1037,8 +1037,8 @@ export class AuthService {
 
   private refreshExpiresAt() {
     const days = Math.min(
-      90,
-      Math.max(1, this.config.get<number>("auth.refreshTokenDays", 90)),
+      365,
+      Math.max(1, this.config.get<number>("auth.refreshTokenDays", 365)),
     );
     return new Date(Date.now() + days * 24 * 60 * 60 * 1_000);
   }
