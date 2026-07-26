@@ -38,6 +38,8 @@ class _UnsubscribeScreenState extends State<UnsubscribeScreen> {
   final Map<String, UnsubscribeJobInfo> _jobs = {};
   final Map<String, UnsubscribeCandidate> _candidateCache = {};
   final Set<String> _busySenders = {};
+  final Set<String> _trustingSenders = {};
+  final Set<String> _hiddenSenderIds = {};
   String? _jobError;
   Timer? _pollTimer;
   int _consecutivePollFailures = 0;
@@ -253,6 +255,52 @@ class _UnsubscribeScreenState extends State<UnsubscribeScreen> {
     }
   }
 
+  Future<void> _trust(UnsubscribeCandidate candidate) async {
+    if (_trustingSenders.contains(candidate.id)) return;
+    final approved = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text('Trust ${candidate.name}?'),
+        content: Text(
+          '${candidate.email} will be protected as a trusted sender and removed from unsubscribe suggestions.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Trust sender'),
+          ),
+        ],
+      ),
+    );
+    if (approved != true || !mounted) return;
+    setState(() => _trustingSenders.add(candidate.id));
+    final trusted = await _repository.setSenderTrusted(candidate.id, true);
+    if (!mounted) return;
+    setState(() {
+      _trustingSenders.remove(candidate.id);
+      if (trusted) {
+        _hiddenSenderIds.add(candidate.id);
+        _jobs.remove(candidate.id);
+        _candidateCache.remove(candidate.id);
+        _candidatesFuture = _loadCandidates();
+      }
+    });
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          trusted
+              ? '${candidate.name} is now trusted and was removed from unsubscribe suggestions.'
+              : _repository.lastError ??
+                    'This sender could not be trusted. Please try again.',
+        ),
+      ),
+    );
+  }
+
   void _schedulePoll([Duration delay = _pollInterval]) {
     _pollTimer?.cancel();
     if (!mounted || !_hasActiveJobs) return;
@@ -348,7 +396,9 @@ class _UnsubscribeScreenState extends State<UnsubscribeScreen> {
     return FutureBuilder<List<UnsubscribeCandidate>>(
       future: _candidatesFuture,
       builder: (context, snapshot) {
-        final liveItems = snapshot.data ?? const <UnsubscribeCandidate>[];
+        final liveItems = (snapshot.data ?? const <UnsubscribeCandidate>[])
+            .where((item) => !_hiddenSenderIds.contains(item.id))
+            .toList();
         final liveIds = liveItems.map((item) => item.id).toSet();
         final retainedItems = _jobs.entries
             .where(
@@ -445,9 +495,11 @@ class _UnsubscribeScreenState extends State<UnsubscribeScreen> {
                       _UnsubscribeRow(
                         candidate: items[i],
                         starting: _busySenders.contains(items[i].id),
+                        trusting: _trustingSenders.contains(items[i].id),
                         job: _jobs[items[i].id],
                         onUnsubscribe: () => _start(items[i]),
                         onRetry: () => _retry(items[i]),
+                        onTrust: () => _trust(items[i]),
                       ),
                       if (i != items.length - 1) const SizedBox(height: 10),
                     ],
@@ -490,16 +542,20 @@ class _UnsubscribeRow extends StatelessWidget {
   const _UnsubscribeRow({
     required this.candidate,
     required this.starting,
+    required this.trusting,
     required this.job,
     required this.onUnsubscribe,
     required this.onRetry,
+    required this.onTrust,
   });
 
   final UnsubscribeCandidate candidate;
   final bool starting;
+  final bool trusting;
   final UnsubscribeJobInfo? job;
   final VoidCallback onUnsubscribe;
   final VoidCallback onRetry;
+  final VoidCallback onTrust;
 
   @override
   Widget build(BuildContext context) {
@@ -589,7 +645,7 @@ class _UnsubscribeRow extends StatelessWidget {
             ),
           ),
           const SizedBox(width: 8),
-          if (starting || job?.isActive == true)
+          if (starting || trusting || job?.isActive == true)
             const SizedBox.square(
               dimension: 22,
               child: CircularProgressIndicator(strokeWidth: 2),
@@ -617,14 +673,27 @@ class _UnsubscribeRow extends StatelessWidget {
               ),
             )
           else
-            IconButton.filledTonal(
-              tooltip: 'Unsubscribe',
-              onPressed: onUnsubscribe,
-              style: IconButton.styleFrom(
-                foregroundColor: AppColors.danger,
-                backgroundColor: AppColors.softFill(context, AppColors.danger),
-              ),
-              icon: const Icon(Icons.unsubscribe_rounded, size: 19),
+            Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                IconButton.filledTonal(
+                  tooltip: 'Unsubscribe',
+                  onPressed: onUnsubscribe,
+                  style: IconButton.styleFrom(
+                    foregroundColor: AppColors.danger,
+                    backgroundColor: AppColors.softFill(
+                      context,
+                      AppColors.danger,
+                    ),
+                  ),
+                  icon: const Icon(Icons.unsubscribe_rounded, size: 19),
+                ),
+                TextButton(
+                  key: ValueKey('trust-unsubscribe-${candidate.id}'),
+                  onPressed: onTrust,
+                  child: const Text('Trust'),
+                ),
+              ],
             ),
         ],
       ),

@@ -4,6 +4,7 @@ import {
   UnsubscribeProcessor,
   isPrivateOrReservedAddress,
   pinnedLookup,
+  preferredPublicAddress,
 } from "./unsubscribe.processor";
 import { ProcessorJob } from "./database-job-queue.service";
 
@@ -202,5 +203,14 @@ describe("UnsubscribeProcessor", () => {
     expect(callback).toHaveBeenCalledWith(null, [
       { address: "1.1.1.1", family: 4 },
     ]);
+  });
+
+  it("prefers IPv4 when a provider resolves IPv6 first", () => {
+    expect(
+      preferredPublicAddress([
+        { address: "2606:4700:4700::1111" },
+        { address: "1.1.1.1" },
+      ]),
+    ).toEqual({ address: "1.1.1.1" });
   });
 });

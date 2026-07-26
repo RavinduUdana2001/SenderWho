@@ -1,5 +1,5 @@
 import { Injectable, Logger, NotFoundException } from "@nestjs/common";
-import { Prisma } from "@prisma/client";
+import { JobStatus, Prisma } from "@prisma/client";
 import {
   mockPromotionEmails,
   mockSenders,
@@ -247,6 +247,21 @@ export class SendersService {
       where: { id: sender.id },
       data: { isTrusted: trusted, isBlocked: trusted ? false : undefined },
     });
+    if (trusted) {
+      await this.prisma.unsubscribeJob.updateMany({
+        where: {
+          userId,
+          senderId: sender.id,
+          status: {
+            in: [JobStatus.QUEUED, JobStatus.RUNNING, JobStatus.FAILED],
+          },
+        },
+        data: {
+          status: JobStatus.CANCELED,
+          completedAt: new Date(),
+        },
+      });
+    }
     await this.safeAudit(
       userId,
       sender.id,

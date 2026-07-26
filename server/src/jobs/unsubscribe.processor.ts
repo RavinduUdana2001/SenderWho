@@ -208,7 +208,10 @@ export class UnsubscribeProcessor {
     ) {
       throw new Error("Private network unsubscribe URLs are not allowed.");
     }
-    const selected = addresses[0];
+    // Shared production hosts frequently resolve IPv6 first without having a
+    // working outbound IPv6 route. Prefer IPv4 when the provider publishes it,
+    // while retaining the DNS pinning and private-address rejection above.
+    const selected = preferredPublicAddress(addresses);
     return {
       address: selected.address,
       family: isIP(selected.address) as 4 | 6,
@@ -293,6 +296,12 @@ export class UnsubscribeProcessor {
       );
     }
   }
+}
+
+export function preferredPublicAddress<T extends { address: string }>(
+  addresses: T[],
+): T {
+  return addresses.find(({ address }) => isIP(address) === 4) ?? addresses[0];
 }
 
 export function pinnedLookup(target: {

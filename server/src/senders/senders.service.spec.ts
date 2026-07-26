@@ -1,4 +1,5 @@
 import "reflect-metadata";
+import { JobStatus } from "@prisma/client";
 import { SenderControl, SenderKind } from "./dto/list-senders.dto";
 import { SendersService } from "./senders.service";
 
@@ -12,6 +13,7 @@ describe("SendersService ownership", () => {
         count: jest.fn().mockResolvedValue(0),
         update: jest.fn(),
       },
+      unsubscribeJob: { updateMany: jest.fn().mockResolvedValue({ count: 0 }) },
       auditLog: { create: jest.fn() },
     };
     return { prisma, service: new SendersService(prisma as never) };
@@ -76,5 +78,34 @@ describe("SendersService ownership", () => {
       service.setBlocked("owner-user", "sender-1", true),
     ).resolves.toMatchObject({ isBlocked: true, isTrusted: false });
     expect(prisma.sender.update).toHaveBeenCalledTimes(1);
+  });
+
+  it("removes trusted senders from active unsubscribe work", async () => {
+    const { prisma, service } = setup();
+    prisma.sender.findFirst.mockResolvedValue({ id: "sender-1" });
+    prisma.sender.update.mockResolvedValue({
+      id: "sender-1",
+      isBlocked: false,
+      isTrusted: true,
+    });
+    prisma.auditLog.create.mockResolvedValue({});
+
+    await expect(
+      service.setTrusted("owner-user", "sender-1", true),
+    ).resolves.toMatchObject({ isTrusted: true });
+
+    expect(prisma.unsubscribeJob.updateMany).toHaveBeenCalledWith({
+      where: {
+        userId: "owner-user",
+        senderId: "sender-1",
+        status: {
+          in: [JobStatus.QUEUED, JobStatus.RUNNING, JobStatus.FAILED],
+        },
+      },
+      data: {
+        status: JobStatus.CANCELED,
+        completedAt: expect.any(Date),
+      },
+    });
   });
 });

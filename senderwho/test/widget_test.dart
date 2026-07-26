@@ -845,6 +845,84 @@ void main() {
     await tester.pump();
   });
 
+  testWidgets(
+    'Trust removes an unsubscribe candidate and persists on refresh',
+    (tester) async {
+      await setScreenSize(tester, const Size(390, 844));
+      var candidateLoads = 0;
+      var trustCalls = 0;
+      final repository = SenderWhoRepository(
+        previewMode: false,
+        client: MockClient((request) async {
+          if (request.url.path.endsWith('/unsubscribe/candidates')) {
+            candidateLoads += 1;
+            return http.Response(
+              jsonEncode({
+                'items': candidateLoads == 1
+                    ? [
+                        {
+                          'id': 'sender-1',
+                          'name': 'Example Newsletter',
+                          'email': 'news@example.test',
+                          'reason': 'Supports secure one-click unsubscribe',
+                          'colorKey': 'warning',
+                        },
+                      ]
+                    : <Object>[],
+              }),
+              200,
+            );
+          }
+          if (request.method == 'GET' &&
+              request.url.path == '/api/v1/unsubscribe/jobs') {
+            return http.Response(jsonEncode({'items': <Object>[]}), 200);
+          }
+          if (request.method == 'PATCH' &&
+              request.url.path == '/api/v1/senders/sender-1/trust') {
+            trustCalls += 1;
+            expect(jsonDecode(request.body), {'trusted': true});
+            return http.Response(
+              jsonEncode({
+                'id': 'sender-1',
+                'isTrusted': true,
+                'isBlocked': false,
+              }),
+              200,
+            );
+          }
+          return http.Response('Not found', 404);
+        }),
+        sessionStore: MemorySessionStore(),
+        baseUrl: 'https://api.example.test/api/v1',
+      );
+
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: AppTheme.light(),
+          home: UnsubscribeScreen(repository: repository),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      await tester.tap(
+        find.byKey(const ValueKey('trust-unsubscribe-sender-1')),
+      );
+      await tester.pumpAndSettle();
+      expect(find.text('Trust Example Newsletter?'), findsOneWidget);
+      await tester.tap(find.widgetWithText(FilledButton, 'Trust sender'));
+      await tester.pumpAndSettle();
+
+      expect(trustCalls, 1);
+      expect(candidateLoads, 2);
+      expect(find.text('Example Newsletter'), findsNothing);
+      expect(find.text('You are all caught up'), findsOneWidget);
+      expect(
+        find.textContaining('is now trusted and was removed'),
+        findsOneWidget,
+      );
+    },
+  );
+
   testWidgets('Unsubscribe polling backs off and pauses after five failures', (
     tester,
   ) async {
