@@ -82,12 +82,19 @@ describe("UnsubscribeService job dispatch", () => {
       data: expect.objectContaining({
         status: JobStatus.QUEUED,
         operationKey: "user-1:sender-1",
-        metadata: { providerMessageId: "gmail-1" },
+        metadata: { providerMessageId: "gmail-1", retryAttempt: 1 },
       }),
     });
     expect(prisma.unsubscribeJob.create).not.toHaveBeenCalled();
     expect(staleQueueJob.remove).toHaveBeenCalledTimes(1);
-    expect(queue.add).toHaveBeenCalledTimes(1);
+    expect(queue.add).toHaveBeenCalledWith(
+      "unsubscribe",
+      "one-click-unsubscribe",
+      { unsubscribeJobId: "unsubscribe-1" },
+      expect.objectContaining({
+        jobId: "unsubscribe-unsubscribe-1-attempt-1",
+      }),
+    );
   });
 
   it("creates a bounded batch with explicit partial-failure results", async () => {

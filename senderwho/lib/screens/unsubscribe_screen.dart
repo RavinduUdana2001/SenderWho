@@ -413,7 +413,10 @@ class _UnsubscribeScreenState extends State<UnsubscribeScreen> {
         final actionableItems = liveItems
             .where(
               (item) =>
-                  !_busySenders.contains(item.id) && _jobs[item.id] == null,
+                  !_busySenders.contains(item.id) &&
+                  (_jobs[item.id] == null ||
+                      _jobs[item.id]?.status == 'FAILED' ||
+                      _jobs[item.id]?.status == 'CANCELED'),
             )
             .toList();
         return AppPage(
@@ -617,14 +620,18 @@ class _UnsubscribeRow extends StatelessWidget {
                       else
                         Icon(jobStatus.icon, size: 15, color: jobStatus.color),
                       const SizedBox(width: 6),
-                      Text(
-                        jobStatus.label,
-                        key: ValueKey('unsubscribe-status-${candidate.id}'),
-                        style: Theme.of(context).textTheme.labelMedium
-                            ?.copyWith(
-                              color: jobStatus.color,
-                              fontWeight: FontWeight.w800,
-                            ),
+                      Flexible(
+                        child: Text(
+                          jobStatus.label,
+                          key: ValueKey('unsubscribe-status-${candidate.id}'),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: Theme.of(context).textTheme.labelMedium
+                              ?.copyWith(
+                                color: jobStatus.color,
+                                fontWeight: FontWeight.w800,
+                              ),
+                        ),
                       ),
                     ],
                   ),
@@ -637,7 +644,7 @@ class _UnsubscribeRow extends StatelessWidget {
                       overflow: TextOverflow.ellipsis,
                       style: Theme.of(
                         context,
-                      ).textTheme.bodySmall?.copyWith(color: AppColors.danger),
+                      ).textTheme.bodySmall?.copyWith(color: jobStatus.color),
                     ),
                   ],
                 ],
@@ -656,7 +663,7 @@ class _UnsubscribeRow extends StatelessWidget {
               onPressed: onRetry,
               icon: const Icon(Icons.refresh_rounded, size: 17),
               label: const Text('Retry'),
-              style: TextButton.styleFrom(foregroundColor: AppColors.danger),
+              style: TextButton.styleFrom(foregroundColor: AppColors.warning),
             )
           else if (job?.status == 'COMPLETED')
             Container(
@@ -752,9 +759,9 @@ _JobStatusPresentation? _jobStatusPresentation(
       );
     case 'FAILED':
       return _JobStatusPresentation(
-        label: 'Failed',
-        color: AppColors.danger,
-        icon: Icons.error_outline_rounded,
+        label: 'Needs retry',
+        color: AppColors.warning,
+        icon: Icons.refresh_rounded,
         reason: job!.failureReason.isNotEmpty
             ? job.failureReason
             : 'The provider could not complete this request. Please retry.',
@@ -794,6 +801,7 @@ class _UnsubscribeHero extends StatelessWidget {
               children: [
                 Text(
                   '$count',
+                  key: const ValueKey('unsubscribe-actionable-count'),
                   style: const TextStyle(
                     color: AppColors.danger,
                     fontSize: 34,

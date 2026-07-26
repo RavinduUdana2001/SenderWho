@@ -819,7 +819,7 @@ void main() {
     await tester.pump(const Duration(seconds: 3));
     await tester.pump();
     expect(jobPolls, 1);
-    expect(find.text('Failed'), findsOneWidget);
+    expect(find.text('Needs retry'), findsOneWidget);
     expect(
       find.text('The provider could not complete this request. Please retry.'),
       findsOneWidget,
@@ -828,6 +828,15 @@ void main() {
       find.byKey(const ValueKey('unsubscribe-retry-sender-1')),
       findsOneWidget,
     );
+    expect(
+      tester
+          .widget<Text>(
+            find.byKey(const ValueKey('unsubscribe-actionable-count')),
+          )
+          .data,
+      '1',
+    );
+    expect(find.text('Unsubscribe from All (1)'), findsOneWidget);
 
     await tester.tap(find.byKey(const ValueKey('unsubscribe-retry-sender-1')));
     await tester.pumpAndSettle();

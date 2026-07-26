@@ -114,7 +114,10 @@ export class UnsubscribeService {
       existing?.status === JobStatus.QUEUED
     ) {
       if (existing.status !== JobStatus.COMPLETED) {
-        await this.enqueueUnsubscribe(existing.id);
+        await this.enqueueUnsubscribe(
+          existing.id,
+          this.retryAttempt(existing.metadata),
+        );
       }
       return existing;
     }
@@ -145,6 +148,9 @@ export class UnsubscribeService {
     }
 
     const operationKey = unsubscribeOperationKey(userId, sender.id);
+    const retryAttempt = existing
+      ? this.retryAttempt(existing.metadata) + 1
+      : 0;
     let unsubscribeJob;
     try {
       unsubscribeJob = existing
@@ -156,7 +162,10 @@ export class UnsubscribeService {
               method: UnsubscribeMethod.LIST_UNSUBSCRIBE_HEADER,
               unsubscribeUrl,
               operationKey,
-              metadata: { providerMessageId: sourceMessage.providerMessageId },
+              metadata: {
+                providerMessageId: sourceMessage.providerMessageId,
+                retryAttempt,
+              },
             },
           })
         : await this.prisma.unsubscribeJob.create({
@@ -167,7 +176,10 @@ export class UnsubscribeService {
               method: UnsubscribeMethod.LIST_UNSUBSCRIBE_HEADER,
               unsubscribeUrl,
               operationKey,
-              metadata: { providerMessageId: sourceMessage.providerMessageId },
+              metadata: {
+                providerMessageId: sourceMessage.providerMessageId,
+                retryAttempt,
+              },
             },
           });
     } catch (error) {
@@ -180,7 +192,10 @@ export class UnsubscribeService {
     }
 
     try {
-      const queueJob = await this.enqueueUnsubscribe(unsubscribeJob.id);
+      const queueJob = await this.enqueueUnsubscribe(
+        unsubscribeJob.id,
+        retryAttempt,
+      );
       await this.safeAudit(userId, unsubscribeJob.id, sender.id);
       return { ...unsubscribeJob, queueJobId: queueJob.id };
     } catch (error) {
@@ -300,7 +315,9 @@ export class UnsubscribeService {
     await Promise.allSettled(
       jobs
         .filter((job) => job.status === JobStatus.QUEUED)
-        .map((job) => this.enqueueUnsubscribe(job.id)),
+        .map((job) =>
+          this.enqueueUnsubscribe(job.id, this.retryAttempt(job.metadata)),
+        ),
     );
     return { items: jobs.map((job) => this.jobResponse(job)) };
   }
@@ -339,8 +356,23 @@ export class UnsubscribeService {
     return "The sender rejected or could not complete the one-click request.";
   }
 
-  private async enqueueUnsubscribe(unsubscribeJobId: string) {
-    const queueJobId = `unsubscribe-${unsubscribeJobId}`;
+  private retryAttempt(metadata: unknown) {
+    const value =
+      metadata && typeof metadata === "object" && !Array.isArray(metadata)
+        ? (metadata as Record<string, unknown>).retryAttempt
+        : undefined;
+    return typeof value === "number" &&
+      Number.isSafeInteger(value) &&
+      value >= 0
+      ? value
+      : 0;
+  }
+
+  private async enqueueUnsubscribe(unsubscribeJobId: string, retryAttempt = 0) {
+    const queueJobId =
+      retryAttempt === 0
+        ? `unsubscribe-${unsubscribeJobId}`
+        : `unsubscribe-${unsubscribeJobId}-attempt-${retryAttempt}`;
     const existingQueueJob = await this.jobs.getJob("unsubscribe", queueJobId);
     if (existingQueueJob) {
       const state = await existingQueueJob.getState();
