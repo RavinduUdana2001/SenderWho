@@ -36,7 +36,7 @@ class _CategoriesScreenState extends State<CategoriesScreen> {
             children: [
               const AppHeader(
                 title: 'Categories',
-                subtitle: 'Browse real Gmail messages by sender type',
+                subtitle: 'Browse real email messages by sender type',
               ),
               SizedBox(height: context.gap(18)),
               if (snapshot.connectionState == ConnectionState.waiting)

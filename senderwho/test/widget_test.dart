@@ -2275,8 +2275,8 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    await tester.ensureVisible(find.text('Search Gmail metadata'));
-    await tester.tap(find.text('Search Gmail metadata'));
+    await tester.ensureVisible(find.text('Search email metadata'));
+    await tester.tap(find.text('Search email metadata'));
     await tester.pumpAndSettle();
     expect(find.text('First invoice'), findsOneWidget);
 
@@ -2348,7 +2348,7 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('Blocked Senders'), findsWidgets);
-    expect(find.textContaining('senders found in Gmail'), findsOneWidget);
+    expect(find.textContaining('senders found in your inbox'), findsOneWidget);
   });
 
   testWidgets('Drawer dark mode switch changes the whole app theme', (

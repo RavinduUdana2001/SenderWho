@@ -43,7 +43,7 @@ class _ActivityInsightsScreenState extends State<ActivityInsightsScreen> {
               children: [
                 const AppHeader(
                   title: 'Activity',
-                  subtitle: 'Trends from your stored Gmail metadata',
+                  subtitle: 'Trends from your stored email metadata',
                 ),
                 SizedBox(height: context.gap(18)),
                 AppAsyncError(
@@ -63,7 +63,7 @@ class _ActivityInsightsScreenState extends State<ActivityInsightsScreen> {
             children: [
               const AppHeader(
                 title: 'Activity',
-                subtitle: 'Trends from your stored Gmail metadata',
+                subtitle: 'Trends from your stored email metadata',
               ),
               SizedBox(height: context.gap(18)),
               AppCard(
@@ -149,7 +149,7 @@ class _ActivityInsightsScreenState extends State<ActivityInsightsScreen> {
                 Padding(
                   padding: const EdgeInsets.only(top: 16),
                   child: Text(
-                    'Activity will appear after Gmail metadata is scanned.',
+                    'Activity will appear after email metadata is scanned.',
                     style: Theme.of(context).textTheme.bodyMedium,
                   ),
                 ),

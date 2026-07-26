@@ -140,7 +140,7 @@ class _EmailsScreenState extends State<EmailsScreen> {
       if (result == null) {
         final message =
             _repository.lastError ??
-            'Could not load Gmail metadata. Check the API and retry.';
+            'Could not load email metadata. Check the API and retry.';
         if (_items.isEmpty) {
           _error = message;
         } else {
@@ -167,7 +167,7 @@ class _EmailsScreenState extends State<EmailsScreen> {
     if (email.id.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
-          content: Text('This Gmail message is missing its local identifier.'),
+          content: Text('This email message is missing its local identifier.'),
         ),
       );
       return;
@@ -188,7 +188,7 @@ class _EmailsScreenState extends State<EmailsScreen> {
         builder: (context) => AlertDialog(
           title: const Text('Move selected emails to Trash?'),
           content: Text(
-            '${_selectedIds.length} Gmail messages will be moved to Trash.',
+            '${_selectedIds.length} email messages will be moved to Trash.',
           ),
           actions: [
             TextButton(
@@ -256,9 +256,9 @@ class _EmailsScreenState extends State<EmailsScreen> {
       }
     }
     final text = result == null
-        ? _repository.lastError ?? 'The Gmail action could not be completed.'
+        ? _repository.lastError ?? 'The email action could not be completed.'
         : result.failed == 0
-        ? '${result.processed} Gmail message${result.processed == 1 ? '' : 's'} updated.'
+        ? '${result.processed} email message${result.processed == 1 ? '' : 's'} updated.'
         : '${result.processed} updated, ${result.failed} failed and remain selected.'
               '${firstFailureReason == null ? '' : ' $firstFailureReason'}';
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(text)));
@@ -339,7 +339,7 @@ class _EmailsScreenState extends State<EmailsScreen> {
         children: [
           AppHeader(
             title: _title ?? mailboxTitle,
-            subtitle: '$_total Gmail message${_total == 1 ? '' : 's'}',
+            subtitle: '$_total email message${_total == 1 ? '' : 's'}',
             showBack: _showBack,
             action: TextButton(
               onPressed: _items.isEmpty

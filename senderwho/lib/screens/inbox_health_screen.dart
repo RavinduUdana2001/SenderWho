@@ -44,7 +44,7 @@ class _InboxHealthScreenState extends State<InboxHealthScreen> {
               children: [
                 const AppHeader(
                   title: 'Inbox Health',
-                  subtitle: 'A live score based on stored Gmail metadata',
+                  subtitle: 'A live score based on stored email metadata',
                   showBack: true,
                 ),
                 SizedBox(height: context.gap(18)),
@@ -65,7 +65,7 @@ class _InboxHealthScreenState extends State<InboxHealthScreen> {
             children: [
               const AppHeader(
                 title: 'Inbox Health',
-                subtitle: 'A live score based on stored Gmail metadata',
+                subtitle: 'A live score based on stored email metadata',
                 showBack: true,
               ),
               SizedBox(height: context.gap(18)),
@@ -128,8 +128,8 @@ class _InboxHealthScreenState extends State<InboxHealthScreen> {
                           const SizedBox(height: 10),
                           Text(
                             health.score == 0
-                                ? 'Inbox health will appear after Gmail metadata is scanned.'
-                                : 'Calculated from the sender and message metadata in your latest Gmail scan.',
+                                ? 'Inbox health will appear after email metadata is scanned.'
+                                : 'Calculated from the sender and message metadata in your latest inbox scan.',
                             style: Theme.of(context).textTheme.labelSmall,
                           ),
                         ],

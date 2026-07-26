@@ -132,7 +132,7 @@ class _FeatureList extends StatelessWidget {
       (
         Icons.layers_outlined,
         'Smart categorization',
-        'Organize real Gmail metadata into useful groups.',
+        'Organize real email metadata into useful groups.',
       ),
       (
         Icons.cleaning_services_outlined,

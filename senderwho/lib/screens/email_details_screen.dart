@@ -54,7 +54,7 @@ class _EmailDetailsScreenState extends State<EmailDetailsScreen> {
     if (id == null || id.isEmpty) {
       setState(() {
         _loading = false;
-        _error = 'No Gmail message was selected.';
+        _error = 'No email message was selected.';
       });
       return;
     }
@@ -106,7 +106,7 @@ class _EmailDetailsScreenState extends State<EmailDetailsScreen> {
       _content = content;
       _contentError = content == null
           ? _repository.lastError ??
-                'The full Gmail message could not be loaded.'
+                'The full email message could not be loaded.'
           : null;
     });
   }
@@ -120,7 +120,7 @@ class _EmailDetailsScreenState extends State<EmailDetailsScreen> {
         builder: (context) => AlertDialog(
           title: const Text('Move this email to Trash?'),
           content: const Text(
-            'The message will be moved to Gmail Trash and can be restored later.',
+            'The message will be moved to Trash and can be restored later.',
           ),
           actions: [
             TextButton(
@@ -148,9 +148,9 @@ class _EmailDetailsScreenState extends State<EmailDetailsScreen> {
       SnackBar(
         content: Text(
           succeeded
-              ? 'Gmail message updated.'
+              ? 'Email message updated.'
               : _repository.lastError ??
-                    'The Gmail action failed. Please retry.',
+                    'The email action failed. Please retry.',
         ),
       ),
     );
@@ -169,7 +169,7 @@ class _EmailDetailsScreenState extends State<EmailDetailsScreen> {
       builder: (context) => AlertDialog(
         title: Text('Unsubscribe from ${email?.sender ?? 'this sender'}?'),
         content: Text(
-          'SenderWho will send a verified one-click unsubscribe request for ${email?.email ?? 'this sender'}. Existing Gmail messages will remain.',
+          'SenderWho will send a verified one-click unsubscribe request for ${email?.email ?? 'this sender'}. Existing email messages will remain.',
         ),
         actions: [
           TextButton(
@@ -450,7 +450,7 @@ class _EmailDetailsScreenState extends State<EmailDetailsScreen> {
                     const SizedBox(width: 9),
                     Expanded(
                       child: Text(
-                        'SenderWho stores Gmail metadata and a short preview—not the full message body. Actions below apply to the selected message.',
+                        'SenderWho stores email metadata and a short preview—not the full message body. Actions below apply to the selected message.',
                         style: Theme.of(context).textTheme.bodySmall,
                       ),
                     ),
@@ -458,7 +458,7 @@ class _EmailDetailsScreenState extends State<EmailDetailsScreen> {
                 ),
               ),
               SizedBox(height: context.gap(22)),
-              const SectionTitle(title: 'Gmail actions'),
+              const SectionTitle(title: 'Email actions'),
               const SizedBox(height: 10),
               AppCard(
                 padding: const EdgeInsets.symmetric(
@@ -575,7 +575,7 @@ class _SelectedMessageContent extends StatelessWidget {
             ),
             const SizedBox(height: 16),
             Text(
-              'Loading this message securely from Gmail…',
+              'Loading this message securely from your inbox…',
               style: Theme.of(context).textTheme.bodyMedium,
             ),
           ] else if (message == null) ...[
@@ -626,7 +626,7 @@ class _SelectedMessageContent extends StatelessWidget {
             const SizedBox(height: 14),
             SelectableText(
               message.bodyText.isEmpty
-                  ? 'This Gmail message does not contain a readable text body.'
+                  ? 'This email message does not contain a readable text body.'
                   : message.bodyText,
               style: Theme.of(
                 context,
@@ -791,7 +791,7 @@ class _ConversationMessageCard extends StatelessWidget {
           const SizedBox(height: 7),
           Text(
             message.snippet.isEmpty
-                ? 'No preview was included in this Gmail message metadata.'
+                ? 'No preview was included in this email message metadata.'
                 : message.snippet,
             maxLines: selected ? 6 : 2,
             overflow: TextOverflow.ellipsis,

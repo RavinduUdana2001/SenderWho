@@ -66,7 +66,7 @@ class _DeleteEmailsScreenState extends State<DeleteEmailsScreen> {
                     ),
                     const SizedBox(height: 8),
                     Text(
-                      'Trusted messages stay untouched. Gmail Trash retention rules apply.',
+                      'Trusted messages stay untouched. Trash retention rules apply.',
                       textAlign: TextAlign.center,
                       style: Theme.of(context).textTheme.bodyMedium,
                     ),

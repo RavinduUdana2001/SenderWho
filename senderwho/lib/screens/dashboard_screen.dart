@@ -84,7 +84,7 @@ class _DashboardScreenState extends State<DashboardScreen>
     if (AppConfig.uiPreviewMode) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
-          content: Text('Gmail actions are disabled in UI preview mode.'),
+          content: Text('Email actions are disabled in UI preview mode.'),
         ),
       );
       return;
@@ -99,8 +99,8 @@ class _DashboardScreenState extends State<DashboardScreen>
       SnackBar(
         content: Text(
           queued
-              ? 'A fresh Gmail metadata scan has been queued.'
-              : 'The Gmail scan could not be queued. Please try again.',
+              ? 'A fresh email metadata scan has been queued.'
+              : 'The inbox scan could not be queued. Please try again.',
         ),
       ),
     );
@@ -240,7 +240,7 @@ class _DashboardContent extends StatelessWidget {
         SizedBox(height: context.gap(28)),
         const _SectionHeader(
           title: 'Inbox overview',
-          caption: 'Live results from stored Gmail metadata',
+          caption: 'Live results from stored email metadata',
         ),
         const SizedBox(height: 14),
         _MetricGrid(summary: dashboard),
@@ -249,7 +249,7 @@ class _DashboardContent extends StatelessWidget {
         SizedBox(height: context.gap(28)),
         const _SectionHeader(
           title: 'Quick actions',
-          caption: 'Manage Gmail without leaving SenderWho',
+          caption: 'Manage your inbox without leaving SenderWho',
         ),
         const SizedBox(height: 14),
         _QuickActionGrid(
@@ -313,7 +313,7 @@ class _PreviewModeNotice extends StatelessWidget {
           const SizedBox(width: 10),
           Expanded(
             child: Text(
-              'UI preview · Sample data · Gmail actions are disabled',
+              'UI preview · Sample data · email actions are disabled',
               style: Theme.of(context).textTheme.labelMedium?.copyWith(
                 color: AppColors.mutedFor(context),
                 fontSize: 10,
@@ -359,7 +359,7 @@ class _DashboardSearch extends StatelessWidget {
               const SizedBox(width: 12),
               Expanded(
                 child: Text(
-                  'Search senders and Gmail metadata',
+                  'Search senders and email metadata',
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                   style: Theme.of(
@@ -803,7 +803,7 @@ class _QuickActionGrid extends StatelessWidget {
       ),
       _ActionData(
         icon: queueingScan ? Icons.sync_rounded : Icons.cloud_sync_outlined,
-        title: queueingScan ? 'Queueing…' : 'Scan Gmail',
+        title: queueingScan ? 'Queueing…' : 'Scan inbox',
         detail: _scanActionDetail(summary),
         color: AppColors.orange,
         onTap:
@@ -918,7 +918,7 @@ class _TopSendersCard extends StatelessWidget {
       return const _EmptyDashboardCard(
         icon: Icons.people_outline_rounded,
         title: 'No sender rankings yet',
-        body: 'Top senders appear after Gmail metadata is scanned.',
+        body: 'Top senders appear after email metadata is scanned.',
       );
     }
 
@@ -1173,11 +1173,11 @@ class _SyncNotice extends StatelessWidget {
                 Text(
                   failed
                       ? needsConnection
-                            ? 'Gmail connection needs attention'
-                            : 'Gmail scan needs attention'
+                            ? 'Email connection needs attention'
+                            : 'Inbox scan needs attention'
                       : backfilling
-                      ? 'Recent Gmail is ready'
-                      : 'Gmail scan in progress',
+                      ? 'Recent email is ready'
+                      : 'Inbox scan in progress',
                   style: Theme.of(context).textTheme.bodyLarge?.copyWith(
                     fontSize: 11,
                     fontWeight: FontWeight.w800,
@@ -1291,7 +1291,7 @@ class _DashboardLoading extends StatelessWidget {
               const SizedBox(height: 16),
               Center(
                 child: Text(
-                  'Loading live Gmail insights…',
+                  'Loading live email insights…',
                   style: Theme.of(context).textTheme.bodySmall,
                 ),
               ),
@@ -1355,7 +1355,7 @@ class _DashboardUnavailable extends StatelessWidget {
               ),
               const SizedBox(height: 8),
               Text(
-                'SenderWho could not load authenticated Gmail results. Check the API connection or sign in again.',
+                'SenderWho could not load authenticated email results. Check the API connection or sign in again.',
                 textAlign: TextAlign.center,
                 style: Theme.of(
                   context,

@@ -131,7 +131,7 @@ class _AllSendersScreenState extends State<AllSendersScreen> {
         children: [
           AppHeader(
             title: _title ?? 'All Senders',
-            subtitle: '$_total senders found in Gmail',
+            subtitle: '$_total senders found in your inbox',
             showBack: _showBack,
             action: IconButton.filledTonal(
               tooltip: 'Refresh senders',

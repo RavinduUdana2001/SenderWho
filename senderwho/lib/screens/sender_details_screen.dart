@@ -74,7 +74,7 @@ class _SenderDetailsScreenState extends State<SenderDetailsScreen> {
         builder: (context) => AlertDialog(
           title: const Text('Block this sender?'),
           content: const Text(
-            'SenderWho will mark this sender as blocked. New messages found during Gmail scans will be moved to Trash.',
+            'SenderWho will mark this sender as blocked. New messages found during inbox scans will be moved to Trash.',
           ),
           actions: [
             TextButton(
@@ -132,7 +132,7 @@ class _SenderDetailsScreenState extends State<SenderDetailsScreen> {
                 const AppHeader(title: 'Sender Details', showBack: true),
                 SizedBox(height: context.gap(25)),
                 if (_detailsFuture == null)
-                  const Text('Select a sender to see Gmail message details.')
+                  const Text('Select a sender to see email message details.')
                 else if (snapshot.hasError)
                   AppCard(
                     padding: const EdgeInsets.all(22),

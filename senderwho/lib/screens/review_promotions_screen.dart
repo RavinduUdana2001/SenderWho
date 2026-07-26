@@ -3,7 +3,7 @@ import 'package:flutter/material.dart';
 import '../services/senderwho_repository.dart';
 import 'emails_screen.dart';
 
-/// Uses the canonical, paginated Gmail list and mutation flow so promotion
+/// Uses the canonical, paginated email list and mutation flow so promotion
 /// review has the same partial-failure, retry, selection, and detail behavior
 /// as every other mailbox.
 class ReviewPromotionsScreen extends StatelessWidget {

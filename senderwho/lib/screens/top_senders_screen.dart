@@ -37,7 +37,7 @@ class _TopSendersScreenState extends State<TopSendersScreen> {
             children: [
               const AppHeader(
                 title: 'Top Senders',
-                subtitle: 'Highest-volume senders in scanned Gmail metadata',
+                subtitle: 'Highest-volume senders in scanned email metadata',
               ),
               SizedBox(height: context.gap(18)),
               if (snapshot.connectionState == ConnectionState.waiting)

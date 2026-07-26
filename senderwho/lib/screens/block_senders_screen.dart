@@ -57,7 +57,7 @@ class _BlockSendersScreenState extends State<BlockSendersScreen> {
                 ),
                 const SizedBox(height: 8),
                 Text(
-                  'New messages found during Gmail scans will be moved to Trash. You can unblock the sender later.',
+                  'New messages found during inbox scans will be moved to Trash. You can unblock the sender later.',
                   textAlign: TextAlign.center,
                   style: Theme.of(context).textTheme.bodyMedium,
                 ),

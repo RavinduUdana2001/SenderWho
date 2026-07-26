@@ -187,7 +187,7 @@ class _SecurityAlertsScreenState extends State<SecurityAlertsScreen> {
                   ),
                   const SizedBox(height: 5),
                   Text(
-                    'Your current Gmail metadata has no matching security risks.',
+                    'Your current email metadata has no matching security risks.',
                     textAlign: TextAlign.center,
                     style: Theme.of(context).textTheme.bodyMedium,
                   ),

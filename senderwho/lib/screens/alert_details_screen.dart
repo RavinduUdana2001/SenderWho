@@ -125,7 +125,7 @@ class _AlertDetailsScreenState extends State<AlertDetailsScreen> {
             const AppHeader(title: 'Alert Details', showBack: true),
             SizedBox(height: context.gap(25)),
             Text(
-              'Select a security alert to view its real Gmail details.',
+              'Select a security alert to view its real email details.',
               style: Theme.of(context).textTheme.bodyMedium,
             ),
           ],

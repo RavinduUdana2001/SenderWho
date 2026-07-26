@@ -14,7 +14,7 @@ if (releaseKeyPropertiesFile.exists()) {
 }
 
 android {
-    namespace = "com.example.sender_who"
+    namespace = "com.senderwho.app"
     compileSdk = flutter.compileSdkVersion
     ndkVersion = flutter.ndkVersion
 
@@ -28,8 +28,7 @@ android {
     }
 
     defaultConfig {
-        // Replace this once the final reverse-DNS ID is registered.
-        applicationId = "com.example.sender_who"
+        applicationId = "com.senderwho.app"
         // You can update the following values to match your application needs.
         // For more information, see: https://flutter.dev/to/review-gradle-config.
         minSdk = flutter.minSdkVersion

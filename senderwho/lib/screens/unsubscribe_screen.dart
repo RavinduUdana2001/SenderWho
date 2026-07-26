@@ -145,7 +145,7 @@ class _UnsubscribeScreenState extends State<UnsubscribeScreen> {
       builder: (context) => AlertDialog(
         title: Text('Unsubscribe from ${items.length} senders?'),
         content: const Text(
-          'SenderWho will ask each provider to stop future recurring email. Existing messages stay in Gmail and are never moved to Trash. Providers may take time to apply the request.',
+          'SenderWho will ask each provider to stop future recurring email. Existing messages stay in your inbox and are never moved to Trash. Providers may take time to apply the request.',
         ),
         actions: [
           TextButton(
@@ -213,7 +213,7 @@ class _UnsubscribeScreenState extends State<UnsubscribeScreen> {
       builder: (context) => AlertDialog(
         title: Text('Unsubscribe from ${candidate.name}?'),
         content: Text(
-          'SenderWho will ask this provider to stop future recurring email to your account. Existing messages stay in Gmail and are never moved to Trash. The provider may take time to apply it.',
+          'SenderWho will ask this provider to stop future recurring email to your account. Existing messages stay in your inbox and are never moved to Trash. The provider may take time to apply it.',
         ),
         actions: [
           TextButton(
@@ -236,7 +236,7 @@ class _UnsubscribeScreenState extends State<UnsubscribeScreen> {
       builder: (context) => AlertDialog(
         title: Text('Retry unsubscribe from ${candidate.name}?'),
         content: Text(
-          'SenderWho will retry the verified one-click request for ${candidate.email}. Existing messages stay in Gmail. Retry only if the previous request failed.',
+          'SenderWho will retry the verified one-click request for ${candidate.email}. Existing messages stay in your inbox. Retry only if the previous request failed.',
         ),
         actions: [
           TextButton(
@@ -517,7 +517,7 @@ class _UnsubscribeScreenState extends State<UnsubscribeScreen> {
                     const SizedBox(width: 7),
                     Expanded(
                       child: Text(
-                        'This asks providers to stop future recurring mail. It never archives, deletes, or moves existing Gmail messages to Trash.',
+                        'This asks providers to stop future recurring mail. It never archives, deletes, or moves existing email messages to Trash.',
                         style: Theme.of(context).textTheme.bodySmall,
                       ),
                     ),

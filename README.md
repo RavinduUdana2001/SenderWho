@@ -81,13 +81,14 @@ A few resources to get you started if this is your first Flutter project:
 
 ## Android production release
 
-Release builds must use an application-owned signing key. Copy
+The Android application ID is `com.senderwho.app`. Release builds must use an
+application-owned signing key. Copy
 `senderwho/android/key.properties.example` to
 `senderwho/android/key.properties`, fill it with the private keystore values,
-and keep both the properties file and keystore outside version control. Replace
-the remaining `com.example.sender_who` application ID only after the final
-reverse-DNS ID has been chosen and registered; changing it later creates a
-different Android application.
+and keep both the properties file and keystore outside version control. Preserve
+that keystore for every future update; changing the application ID or signing
+key creates a different Android application that cannot update the installed
+release.
 
 Before deploying the backend, replace every `REPLACE_WITH_...` value in the
 runtime environment. Production startup rejects placeholders and Gmail scan

@@ -24,7 +24,7 @@ void main() {
 
       expect(find.text('Dashboard'), findsOneWidget);
       expect(
-        find.text('UI preview · Sample data · Gmail actions are disabled'),
+        find.text('UI preview · Sample data · email actions are disabled'),
         findsOneWidget,
       );
       expect(find.textContaining('5,003'), findsOneWidget);

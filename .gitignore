@@ -57,6 +57,7 @@ server/*.tsbuildinfo
 
 # Generated deployment archives
 /*.zip
+/*.apk
 
 # Symbolication related
 app.*.symbols

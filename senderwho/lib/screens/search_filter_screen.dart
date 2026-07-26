@@ -65,7 +65,7 @@ class _SearchFilterScreenState extends State<SearchFilterScreen> {
               children: [
                 AppHeader(
                   title: 'Search & Filter',
-                  subtitle: 'Find senders and messages in Gmail metadata',
+                  subtitle: 'Find senders and messages in email metadata',
                 ),
                 SizedBox(height: 18),
                 AppCard(
@@ -91,7 +91,7 @@ class _SearchFilterScreenState extends State<SearchFilterScreen> {
               children: [
                 const AppHeader(
                   title: 'Search & Filter',
-                  subtitle: 'Find senders and messages in Gmail metadata',
+                  subtitle: 'Find senders and messages in email metadata',
                 ),
                 SizedBox(height: context.gap(18)),
                 AppAsyncError(
@@ -111,7 +111,7 @@ class _SearchFilterScreenState extends State<SearchFilterScreen> {
             children: [
               const AppHeader(
                 title: 'Search & Filter',
-                subtitle: 'Find senders and messages in Gmail metadata',
+                subtitle: 'Find senders and messages in email metadata',
               ),
               SizedBox(height: context.gap(18)),
               SearchBox(
@@ -244,7 +244,7 @@ class _SearchFilterScreenState extends State<SearchFilterScreen> {
               ],
               SizedBox(height: context.gap(18)),
               AppButton(
-                label: _searching ? 'Searching…' : 'Search Gmail metadata',
+                label: _searching ? 'Searching…' : 'Search email metadata',
                 onPressed: _searching ? null : () => _applyFilters(),
               ),
               if (_searching) ...[
@@ -272,7 +272,7 @@ class _SearchFilterScreenState extends State<SearchFilterScreen> {
                 ],
                 if (results.total == 0)
                   Text(
-                    'No stored Gmail metadata matches these filters.',
+                    'No stored email metadata matches these filters.',
                     style: Theme.of(context).textTheme.bodyMedium,
                   ),
                 for (final sender in results.senders) ...[

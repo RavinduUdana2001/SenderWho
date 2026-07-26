@@ -1,4 +1,4 @@
-package com.example.sender_who
+package com.senderwho.app
 
 import io.flutter.embedding.android.FlutterActivity
 
