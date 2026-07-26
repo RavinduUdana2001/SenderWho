@@ -1,0 +1,9 @@
+vulnerabilities:
+  - id: CVE-2026-14257
+    statement: >-
+      brace-expansion is present only in the one-shot Prisma migration CLI.
+      The CLI processes repository-controlled migration paths and is never
+      exposed to user-supplied patterns. The available fix requires an
+      incompatible major version; reassess this exception after Prisma
+      publishes a compatible dependency update.
+    expired_at: 2026-10-26
