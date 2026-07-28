@@ -20,8 +20,9 @@ export function validateEnvironment(environment: Environment): Environment {
     environment.YAHOO_CLIENT_SECRET?.trim() ??
     environment.YAHOO_CONSUMER_SECRET?.trim();
   const yahooCallbackUrl = environment.YAHOO_OAUTH_CALLBACK_URL?.trim();
-  const yahooEnabled = Boolean(yahooClientId || yahooClientSecret);
-  if (yahooEnabled) {
+  const yahooConfigured = Boolean(yahooClientId || yahooClientSecret);
+  const yahooEnabled = environment.YAHOO_OAUTH_ENABLED === "true";
+  if (yahooConfigured || yahooEnabled) {
     if (!yahooClientId || !yahooClientSecret || !yahooCallbackUrl) {
       throw new Error(
         "YAHOO_CLIENT_ID, YAHOO_CLIENT_SECRET, and YAHOO_OAUTH_CALLBACK_URL must be configured together.",
@@ -112,7 +113,7 @@ export function validateEnvironment(environment: Environment): Environment {
       );
     }
     if (
-      yahooEnabled &&
+      (yahooConfigured || yahooEnabled) &&
       yahooCallbackUrl &&
       !yahooCallbackUrl.startsWith("https://")
     ) {

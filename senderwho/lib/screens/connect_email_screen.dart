@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
 import '../config/app_config.dart';
@@ -10,9 +12,14 @@ import '../widgets/icon_bubble.dart';
 import '../widgets/responsive_entry_page.dart';
 
 class ConnectEmailScreen extends StatefulWidget {
-  const ConnectEmailScreen({super.key, this.startOAuth});
+  const ConnectEmailScreen({
+    super.key,
+    this.startOAuth,
+    this.availableProviders,
+  });
 
   final Future<bool> Function(String provider)? startOAuth;
+  final Future<Map<String, bool>> Function()? availableProviders;
 
   static const routeName = '/connect-email';
 
@@ -21,16 +28,46 @@ class ConnectEmailScreen extends StatefulWidget {
 }
 
 class _ConnectEmailScreenState extends State<ConnectEmailScreen> {
-  late final Future<String?> _rememberedEmail = senderWhoRepository
-      .rememberedEmail();
+  String? rememberedEmail;
+  Map<String, bool> providers = const {'google': true, 'yahoo': false};
   bool connecting = false;
   String? connectingProvider;
+  String? failedProvider;
   String? errorMessage;
+
+  @override
+  void initState() {
+    super.initState();
+    unawaited(_loadRememberedEmail());
+    final providerRequest =
+        widget.availableProviders?.call() ??
+        (widget.startOAuth != null
+            ? Future.value(const {'google': true, 'yahoo': true})
+            : senderWhoRepository.availableAuthProviders());
+    unawaited(_loadProviders(providerRequest));
+  }
+
+  Future<void> _loadRememberedEmail() async {
+    final email = await senderWhoRepository.rememberedEmail();
+    if (!mounted) return;
+    setState(() => rememberedEmail = email);
+  }
+
+  Future<void> _loadProviders(Future<Map<String, bool>> request) async {
+    try {
+      final available = await request;
+      if (!mounted) return;
+      setState(() => providers = available);
+    } on Object {
+      // Keep the safe Gmail-only default if capability discovery is unavailable.
+    }
+  }
 
   Future<void> _connect(String provider, {bool chooseAccount = false}) async {
     setState(() {
       connecting = true;
       connectingProvider = provider;
+      failedProvider = null;
       errorMessage = null;
     });
     final oauth =
@@ -44,6 +81,7 @@ class _ConnectEmailScreenState extends State<ConnectEmailScreen> {
 
     if (!opened) {
       setState(() {
+        failedProvider = provider;
         errorMessage =
             (widget.startOAuth == null
                 ? senderWhoRepository.lastError
@@ -53,42 +91,6 @@ class _ConnectEmailScreenState extends State<ConnectEmailScreen> {
       return;
     }
 
-    Navigator.pushNamedAndRemoveUntil(
-      context,
-      DashboardScreen.routeName,
-      (_) => false,
-    );
-  }
-
-  Future<void> _connectYahoo() async {
-    if (widget.startOAuth != null) {
-      await _connect('yahoo');
-      return;
-    }
-    final credentials = await showDialog<_YahooCredentials>(
-      context: context,
-      builder: (context) => const _YahooConnectDialog(),
-    );
-    if (credentials == null || !mounted) return;
-    setState(() {
-      connecting = true;
-      connectingProvider = 'yahoo';
-      errorMessage = null;
-    });
-    final connected = await senderWhoRepository.connectYahooImap(
-      credentials.email,
-      credentials.appPassword,
-    );
-    if (!mounted) return;
-    setState(() => connecting = false);
-    if (!connected) {
-      setState(() {
-        errorMessage =
-            senderWhoRepository.lastError ??
-            'Yahoo Mail could not be connected. Check the generated app password.';
-      });
-      return;
-    }
     Navigator.pushNamedAndRemoveUntil(
       context,
       DashboardScreen.routeName,
@@ -145,20 +147,21 @@ class _ConnectEmailScreenState extends State<ConnectEmailScreen> {
           ConstrainedBox(
             constraints: const BoxConstraints(maxWidth: 340),
             child: Text(
-              'Securely connect Gmail or Yahoo Mail to identify senders, organize messages, and power cleanup suggestions.',
+              providers['yahoo'] == true
+                  ? 'Securely connect Gmail or Yahoo Mail to identify senders, organize messages, and power cleanup suggestions.'
+                  : 'Securely connect Gmail to identify senders, organize messages, and power cleanup suggestions.',
               textAlign: TextAlign.center,
               style: Theme.of(context).textTheme.bodyMedium,
             ),
           ),
           SizedBox(height: context.verticalGap(26)),
-          FutureBuilder<String?>(
-            future: _rememberedEmail,
-            builder: (context, snapshot) {
-              final rememberedEmail = snapshot.data?.trim();
+          Builder(
+            builder: (context) {
+              final previousEmail = rememberedEmail?.trim();
               final hasRememberedAccount =
                   !AppConfig.uiPreviewMode &&
-                  rememberedEmail != null &&
-                  rememberedEmail.isNotEmpty;
+                  previousEmail != null &&
+                  previousEmail.isNotEmpty;
               return Column(
                 children: [
                   _SignInOption(
@@ -173,7 +176,7 @@ class _ConnectEmailScreenState extends State<ConnectEmailScreen> {
                     subtitle: AppConfig.uiPreviewMode
                         ? 'Open the sample dashboard without Google sign-in'
                         : hasRememberedAccount
-                        ? rememberedEmail
+                        ? previousEmail
                         : 'Use your Gmail account',
                     onTap: connecting ? null : () => _connect('google'),
                   ),
@@ -187,15 +190,17 @@ class _ConnectEmailScreenState extends State<ConnectEmailScreen> {
                       label: const Text('Use another Google account'),
                     ),
                   ],
-                  const SizedBox(height: 12),
-                  _SignInOption(
-                    label: 'Y!',
-                    color: const Color(0xFF6001D2),
-                    backgroundColor: const Color(0xFFF1E7FF),
-                    title: 'Continue with Yahoo',
-                    subtitle: 'Connect securely with a Yahoo app password',
-                    onTap: connecting ? null : _connectYahoo,
-                  ),
+                  if (providers['yahoo'] == true) ...[
+                    const SizedBox(height: 12),
+                    _SignInOption(
+                      label: 'Y!',
+                      color: const Color(0xFF6001D2),
+                      backgroundColor: const Color(0xFFF1E7FF),
+                      title: 'Continue with Yahoo',
+                      subtitle: 'Sign in securely with your Yahoo account',
+                      onTap: connecting ? null : () => _connect('yahoo'),
+                    ),
+                  ],
                 ],
               );
             },
@@ -215,7 +220,7 @@ class _ConnectEmailScreenState extends State<ConnectEmailScreen> {
                   Expanded(
                     child: Text(
                       connectingProvider == 'yahoo'
-                          ? 'Verifying the Yahoo app password and connecting securely…'
+                          ? 'Complete Yahoo sign-in in your browser, then return here.'
                           : 'Complete Google sign-in in your browser, then return here.',
                       style: Theme.of(context).textTheme.bodySmall,
                     ),
@@ -232,7 +237,9 @@ class _ConnectEmailScreenState extends State<ConnectEmailScreen> {
             const SizedBox(height: 16),
             _OAuthErrorCard(
               message: errorMessage!,
-              onRetry: connecting ? null : () => _connect('google'),
+              onRetry: connecting
+                  ? null
+                  : () => _connect(failedProvider ?? 'google'),
             ),
           ],
           SizedBox(height: context.verticalGap(18)),
@@ -260,118 +267,6 @@ class _ConnectEmailScreenState extends State<ConnectEmailScreen> {
           ),
         ],
       ),
-    );
-  }
-}
-
-class _YahooCredentials {
-  const _YahooCredentials(this.email, this.appPassword);
-
-  final String email;
-  final String appPassword;
-}
-
-class _YahooConnectDialog extends StatefulWidget {
-  const _YahooConnectDialog();
-
-  @override
-  State<_YahooConnectDialog> createState() => _YahooConnectDialogState();
-}
-
-class _YahooConnectDialogState extends State<_YahooConnectDialog> {
-  final _email = TextEditingController();
-  final _password = TextEditingController();
-  final _formKey = GlobalKey<FormState>();
-  bool _obscure = true;
-
-  @override
-  void dispose() {
-    _email.dispose();
-    _password.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return AlertDialog(
-      title: const Text('Connect Yahoo Mail'),
-      content: Form(
-        key: _formKey,
-        child: SingleChildScrollView(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              const Text(
-                'Generate an app password in Yahoo Account Security. Do not enter your normal Yahoo password.',
-              ),
-              const SizedBox(height: 16),
-              TextFormField(
-                controller: _email,
-                keyboardType: TextInputType.emailAddress,
-                autocorrect: false,
-                textCapitalization: TextCapitalization.none,
-                autofillHints: const [AutofillHints.email],
-                decoration: const InputDecoration(
-                  labelText: 'Yahoo email',
-                  prefixIcon: Icon(Icons.alternate_email_rounded),
-                ),
-                validator: (value) {
-                  final input = value?.trim() ?? '';
-                  return input.contains('@')
-                      ? null
-                      : 'Enter your Yahoo email address.';
-                },
-              ),
-              const SizedBox(height: 12),
-              TextFormField(
-                controller: _password,
-                obscureText: _obscure,
-                autocorrect: false,
-                enableSuggestions: false,
-                decoration: InputDecoration(
-                  labelText: 'Generated app password',
-                  prefixIcon: const Icon(Icons.key_rounded),
-                  suffixIcon: IconButton(
-                    tooltip: _obscure ? 'Show password' : 'Hide password',
-                    onPressed: () => setState(() => _obscure = !_obscure),
-                    icon: Icon(
-                      _obscure
-                          ? Icons.visibility_outlined
-                          : Icons.visibility_off_outlined,
-                    ),
-                  ),
-                ),
-                validator: (value) =>
-                    (value ?? '').replaceAll(RegExp(r'\s+'), '').length >= 12
-                    ? null
-                    : 'Enter the generated Yahoo app password.',
-              ),
-              const SizedBox(height: 10),
-              Text(
-                'The app password is encrypted on the SenderWho server and can be revoked from Yahoo at any time.',
-                style: Theme.of(context).textTheme.bodySmall,
-              ),
-            ],
-          ),
-        ),
-      ),
-      actions: [
-        TextButton(
-          onPressed: () => Navigator.pop(context),
-          child: const Text('Cancel'),
-        ),
-        FilledButton(
-          onPressed: () {
-            if (_formKey.currentState?.validate() != true) return;
-            Navigator.pop(
-              context,
-              _YahooCredentials(_email.text.trim(), _password.text),
-            );
-          },
-          child: const Text('Connect'),
-        ),
-      ],
     );
   }
 }

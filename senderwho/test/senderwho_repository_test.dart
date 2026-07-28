@@ -47,44 +47,32 @@ void main() {
     expect(repository.lastError, 'Sign-in was canceled.');
   });
 
-  test(
-    'Yahoo app-password connection establishes a secure app session',
-    () async {
-      final store = MemorySessionStore();
-      final repository = SenderWhoRepository(
-        previewMode: false,
-        client: MockClient((request) async {
-          expect(request.url.path, '/api/v1/auth/yahoo/imap/connect');
-          expect(request.headers['x-senderwho-device-id'], isNotEmpty);
-          expect(jsonDecode(request.body), {
-            'email': 'person@yahoo.com',
-            'appPassword': 'abcd efgh ijkl mnop',
-          });
-          return http.Response(
-            jsonEncode({
-              'status': 'AUTHENTICATED',
-              'accessToken': 'access-yahoo',
-              'refreshToken': 'refresh-yahoo',
-              'user': {'email': 'person@yahoo.com'},
-            }),
-            200,
-          );
-        }),
-        sessionStore: store,
-        baseUrl: 'https://api.example.test/api/v1',
-      );
+  test('discovers which production sign-in providers are available', () async {
+    final repository = SenderWhoRepository(
+      previewMode: false,
+      client: MockClient((request) async {
+        expect(request.url.path, endsWith('/auth/providers'));
+        expect(request.headers['authorization'], isNull);
+        return http.Response(
+          jsonEncode({
+            'providers': {
+              'google': {'enabled': true},
+              'yahoo': {'enabled': false},
+            },
+          }),
+          200,
+        );
+      }),
+      sessionStore: MemorySessionStore(),
+      baseUrl: 'https://api.example.test/api/v1',
+    );
 
-      expect(
-        await repository.connectYahooImap(
-          'person@yahoo.com',
-          'abcd efgh ijkl mnop',
-        ),
-        isTrue,
-      );
-      expect(store.refreshToken, 'refresh-yahoo');
-      expect(repository.isAuthenticated, isTrue);
-    },
-  );
+    expect(await repository.availableAuthProviders(), {
+      'google': true,
+      'yahoo': false,
+    });
+    expect(repository.lastError, isNull);
+  });
 
   test('secure storage read failures do not crash app startup', () async {
     final repository = SenderWhoRepository(

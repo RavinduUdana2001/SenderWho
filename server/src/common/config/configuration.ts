@@ -35,6 +35,7 @@ export default () => ({
       callbackUrl: process.env.MICROSOFT_OAUTH_CALLBACK_URL,
     },
     yahoo: {
+      enabled: process.env.YAHOO_OAUTH_ENABLED === "true",
       clientId: process.env.YAHOO_CLIENT_ID ?? process.env.YAHOO_CONSUMER_KEY,
       clientSecret:
         process.env.YAHOO_CLIENT_SECRET ?? process.env.YAHOO_CONSUMER_SECRET,

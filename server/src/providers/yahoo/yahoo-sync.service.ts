@@ -1,14 +1,11 @@
 import { Injectable, Logger, UnauthorizedException } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
 import { EmailProvider, SyncStatus } from "@prisma/client";
-import {
-  TokenEncryptionService,
-  yahooProviderTokenContext,
-} from "../../common/security/token-encryption.service";
 import { PrismaService } from "../../database/prisma.service";
 import { GmailSyncService } from "../gmail/gmail-sync.service";
 import { YahooImapClient } from "./yahoo-imap.client";
 import { YahooMessageAction } from "./yahoo-imap.client";
+import { YahooTokenService } from "./yahoo-token.service";
 
 interface SyncProgress {
   (processed: number, discovered: number): Promise<void> | void;
@@ -21,8 +18,8 @@ export class YahooSyncService {
   constructor(
     private readonly config: ConfigService,
     private readonly prisma: PrismaService,
-    private readonly encryption: TokenEncryptionService,
     private readonly yahoo: YahooImapClient,
+    private readonly yahooTokens: YahooTokenService,
     private readonly metadata: GmailSyncService,
   ) {}
 
@@ -51,22 +48,11 @@ export class YahooSyncService {
         select: {
           userId: true,
           emailAddress: true,
-          providerAccountId: true,
-          refreshTokenEncrypted: true,
           backfillPageToken: true,
           backfillComplete: true,
           backfillProcessed: true,
         },
       });
-      if (!account.refreshTokenEncrypted) {
-        throw new UnauthorizedException(
-          "Reconnect Yahoo with a generated app password.",
-        );
-      }
-      const password = this.encryption.decrypt(
-        account.refreshTokenEncrypted,
-        yahooProviderTokenContext(account.providerAccountId),
-      );
       const maxMessages = Math.min(
         500,
         Math.max(25, this.config.get<number>("gmailSync.maxMessages", 500)),
@@ -74,11 +60,13 @@ export class YahooSyncService {
       const cursor = account.backfillPageToken
         ? Math.max(1, Number.parseInt(account.backfillPageToken, 10) || 1)
         : undefined;
-      const page = await this.yahoo.fetchInboxPage(
-        account.emailAddress,
-        password,
-        cursor,
-        maxMessages,
+      const page = await this.withYahooAccess(emailAccountId, (accessToken) =>
+        this.yahoo.fetchInboxPage(
+          account.emailAddress,
+          accessToken,
+          cursor,
+          maxMessages,
+        ),
       );
       let processed = 0;
       for (const message of page.messages) {
@@ -151,48 +139,57 @@ export class YahooSyncService {
     providerMessageId: string,
     action: YahooMessageAction,
   ) {
-    const account = await this.accountCredentials(emailAccountId);
-    return this.yahoo.applyMessageAction(
-      account.emailAddress,
-      account.password,
-      providerMessageId,
-      action,
+    const account = await this.accountIdentity(emailAccountId);
+    return this.withYahooAccess(emailAccountId, (accessToken) =>
+      this.yahoo.applyMessageAction(
+        account.emailAddress,
+        accessToken,
+        providerMessageId,
+        action,
+      ),
     );
   }
 
   async getMessageContent(emailAccountId: string, providerMessageId: string) {
-    const account = await this.accountCredentials(emailAccountId);
-    return this.yahoo.getMessageContent(
-      account.emailAddress,
-      account.password,
-      providerMessageId,
+    const account = await this.accountIdentity(emailAccountId);
+    return this.withYahooAccess(emailAccountId, (accessToken) =>
+      this.yahoo.getMessageContent(
+        account.emailAddress,
+        accessToken,
+        providerMessageId,
+      ),
     );
   }
 
-  private async accountCredentials(emailAccountId: string) {
+  private async accountIdentity(emailAccountId: string) {
     const account = await this.prisma.emailAccount.findUniqueOrThrow({
       where: { id: emailAccountId },
       select: {
         provider: true,
-        providerAccountId: true,
         emailAddress: true,
-        refreshTokenEncrypted: true,
       },
     });
-    if (
-      account.provider !== EmailProvider.YAHOO ||
-      !account.refreshTokenEncrypted
-    ) {
+    if (account.provider !== EmailProvider.YAHOO) {
       throw new UnauthorizedException(
-        "Reconnect Yahoo with a generated app password.",
+        "Reconnect Yahoo Mail before continuing.",
       );
     }
-    return {
-      emailAddress: account.emailAddress,
-      password: this.encryption.decrypt(
-        account.refreshTokenEncrypted,
-        yahooProviderTokenContext(account.providerAccountId),
-      ),
-    };
+    return { emailAddress: account.emailAddress };
+  }
+
+  private async withYahooAccess<T>(
+    emailAccountId: string,
+    action: (accessToken: string) => Promise<T>,
+  ) {
+    try {
+      return await action(
+        await this.yahooTokens.getAccessToken(emailAccountId),
+      );
+    } catch (error) {
+      if (!(error instanceof UnauthorizedException)) throw error;
+      return action(
+        await this.yahooTokens.getAccessToken(emailAccountId, true),
+      );
+    }
   }
 }

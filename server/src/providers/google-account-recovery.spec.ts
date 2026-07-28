@@ -1,4 +1,7 @@
-import { getGoogleAccountRecoveryAction } from "./google-account-recovery";
+import {
+  getEmailAccountRecoveryAction,
+  getGoogleAccountRecoveryAction,
+} from "./google-account-recovery";
 
 describe("getGoogleAccountRecoveryAction", () => {
   it("distinguishes retry, reconnect, and Google configuration failures", () => {
@@ -24,5 +27,25 @@ describe("getGoogleAccountRecoveryAction", () => {
         "Unsupported state or unable to authenticate data",
       ),
     ).toBe("RECONNECT");
+  });
+
+  it("uses provider-neutral recovery actions for Yahoo accounts", () => {
+    expect(
+      getEmailAccountRecoveryAction(
+        "YAHOO",
+        "DISCONNECTED",
+        "Yahoo authorization expired. Reconnect Yahoo Mail.",
+      ),
+    ).toBe("RECONNECT");
+    expect(
+      getEmailAccountRecoveryAction("YAHOO", "FAILED", "Temporary timeout"),
+    ).toBe("RETRY");
+    expect(
+      getEmailAccountRecoveryAction(
+        "YAHOO",
+        "FAILED",
+        "OAuth client is disabled",
+      ),
+    ).toBe("RETRY");
   });
 });

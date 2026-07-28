@@ -6,6 +6,7 @@ import { SenderIdentityRiskService } from "./gmail/sender-identity-risk.service"
 import { GoogleTokenService } from "./google-token.service";
 import { YahooImapClient } from "./yahoo/yahoo-imap.client";
 import { YahooSyncService } from "./yahoo/yahoo-sync.service";
+import { YahooTokenService } from "./yahoo/yahoo-token.service";
 
 @Global()
 @Module({
@@ -17,6 +18,7 @@ import { YahooSyncService } from "./yahoo/yahoo-sync.service";
     TokenEncryptionService,
     YahooImapClient,
     YahooSyncService,
+    YahooTokenService,
   ],
   exports: [
     GmailClient,
@@ -26,6 +28,7 @@ import { YahooSyncService } from "./yahoo/yahoo-sync.service";
     TokenEncryptionService,
     YahooImapClient,
     YahooSyncService,
+    YahooTokenService,
   ],
 })
 export class EmailProvidersModule {}

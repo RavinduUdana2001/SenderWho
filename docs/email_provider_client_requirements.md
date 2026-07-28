@@ -108,43 +108,33 @@ Important: `gmail.metadata`, `gmail.readonly`, and `gmail.modify` are restricted
 
 ## Yahoo Setup
 
-Yahoo is more complicated than Gmail because production-grade Yahoo Mail access is commonly handled through IMAP/SMTP with app passwords unless the app has approved Yahoo OAuth mail access.
+SenderWho uses Yahoo OAuth 2.0 with IMAP. The application must receive Yahoo
+approval for the restricted read/write mail scopes before public release.
 
-The client should provide one of these:
-
-### Option A: Yahoo OAuth App Credentials
-
-Use this if Yahoo approves the app for the required mailbox access.
+The client must provide one application-wide credential pair:
 
 ```text
+YAHOO_OAUTH_ENABLED=false
 YAHOO_CLIENT_ID=
 YAHOO_CLIENT_SECRET=
 YAHOO_OAUTH_CALLBACK_URL=https://api.senderwho.com/api/v1/auth/oauth/yahoo/callback
 ```
 
-### Option B: Yahoo IMAP App Password
-
-SenderWho implements this option for production when approved Yahoo OAuth mail
-access is not available. See the
-[Yahoo production setup](yahoo_production_setup.md).
+Request `openid`, `email`, `profile`, `mail-r`, and `mail-w`. See the
+[Yahoo production setup](yahoo_production_setup.md). End users sign in on
+Yahoo's consent page and never enter developer keys or app passwords.
+Keep the feature flag `false` until Yahoo approves both mail scopes; Gmail
+remains available and the mobile app hides Yahoo during that period.
 
 Yahoo IMAP settings:
 
 ```text
 YAHOO_IMAP_HOST=imap.mail.yahoo.com
 YAHOO_IMAP_PORT=993
-YAHOO_SMTP_HOST=smtp.mail.yahoo.com
-YAHOO_SMTP_PORT=465
 ```
 
-User-provided details:
-
-```text
-Yahoo email address
-Yahoo app password, not the user's main Yahoo password
-```
-
-The app must never ask for or store the user's normal Yahoo password. If app-password fallback is used, the backend must encrypt the app password at rest using `TOKEN_ENCRYPTION_KEY`, and the UI must clearly explain that the user can revoke it from Yahoo account security settings.
+The backend encrypts OAuth access and refresh tokens at rest using the configured
+versioned token-encryption key ring.
 
 ## How The App Flow Should Work
 
@@ -178,23 +168,14 @@ Use `access_type=offline` when building the Google authorization URL. That is wh
 
 ### Connect Yahoo
 
-If Yahoo OAuth mail access is available:
-
 ```text
 Flutter calls POST /api/v1/auth/oauth/yahoo/start
 Backend returns Yahoo authorization URL
 User signs in through Yahoo consent page
 Yahoo redirects to backend callback
-Backend stores encrypted token and queues first sync
-```
-
-If using IMAP app-password fallback:
-
-```text
-Flutter asks for Yahoo email + app password
-Backend validates IMAP login
-Backend encrypts app password
+Backend validates OAuth IMAP access and stores encrypted tokens
 Backend queues first sync
+Flutter exchanges the completed login session and opens the dashboard
 ```
 
 ## Should We Ask For All Permissions At One Time?
@@ -239,7 +220,7 @@ POST /api/v1/cleanup/jobs
 Store only what the product needs:
 
 - Email account provider and address
-- Encrypted OAuth refresh token or encrypted Yahoo app password
+- Encrypted OAuth refresh token
 - Provider message IDs
 - Sender name/email/domain
 - Subject/snippet only if required
@@ -254,7 +235,8 @@ Avoid storing full email body content unless a specific feature truly requires i
 
 Gmail restricted scopes can trigger Google app verification and possible security assessment. Plan this before public launch, not after development is finished.
 
-Yahoo app-password fallback is useful for MVP testing, but it is less elegant than OAuth and should be treated as a fallback until official Yahoo mailbox OAuth access is confirmed.
+Yahoo Mail OAuth scopes are restricted. Public Yahoo scanning must not be
+enabled until Yahoo approves the application's `mail-r` and `mail-w` access.
 
 ## References
 
@@ -262,4 +244,4 @@ Yahoo app-password fallback is useful for MVP testing, but it is less elegant th
 - Google OAuth 2.0 web server flow: https://developers.google.com/identity/protocols/oauth2/web-server
 - Yahoo OAuth 2.0 guide: https://developer.yahoo.com/oauth2/guide/
 - Yahoo IMAP settings: https://help.yahoo.com/kb/SLN4075.html
-- Yahoo app passwords: https://help.yahoo.com/kb/SLN15241.html
+- Yahoo Mail developer access: https://senders.yahooinc.com/developer/developer-access/

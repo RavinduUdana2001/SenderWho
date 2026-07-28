@@ -113,7 +113,7 @@ export class EmailMessagesService {
         emailAccount: { select: { provider: true } },
       },
     });
-    if (!stored) throw new NotFoundException("Gmail message was not found.");
+    if (!stored) throw new NotFoundException("Email message was not found.");
     if (stored.emailAccount.provider === "YAHOO") {
       if (!this.yahooSync) {
         throw new NotFoundException("Yahoo message content is unavailable.");
@@ -207,7 +207,7 @@ export class EmailMessagesService {
       select: { id: true, emailAccountId: true, providerMessageId: true },
     });
     if (messages.length !== uniqueMessageIds.length) {
-      throw new NotFoundException("One or more Gmail messages were not found.");
+      throw new NotFoundException("One or more email messages were not found.");
     }
 
     const byAccount = new Map<string, StoredMessage[]>();

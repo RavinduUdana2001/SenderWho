@@ -6,7 +6,6 @@ import { TokenEncryptionService } from "../common/security/token-encryption.serv
 import { PrismaService } from "../database/prisma.service";
 import { GmailClient } from "../providers/gmail/gmail.client";
 import { InboxJobsService } from "../jobs/inbox-jobs.service";
-import { YahooImapClient } from "../providers/yahoo/yahoo-imap.client";
 import { AuthService } from "./auth.service";
 
 describe("AuthService", () => {
@@ -22,6 +21,7 @@ describe("AuthService", () => {
             "http://localhost:3000/api/v1/auth/oauth/google/callback",
         },
         yahoo: {
+          enabled: true,
           clientId: "yahoo-client-id",
           clientSecret: "yahoo-client-secret",
           callbackUrl: "http://localhost:3000/api/v1/auth/oauth/yahoo/callback",
@@ -69,6 +69,41 @@ describe("AuthService", () => {
     );
   });
 
+  it("publishes only OAuth providers that are ready for end users", () => {
+    expect(service.availableProviders()).toEqual({
+      providers: {
+        google: { enabled: true },
+        yahoo: { enabled: true },
+      },
+    });
+
+    const disabledYahooService = new AuthService(
+      new ConfigService({
+        oauth: {
+          yahoo: {
+            enabled: false,
+            clientId: "yahoo-client-id",
+            clientSecret: "yahoo-client-secret",
+            callbackUrl:
+              "https://api.example.test/api/v1/auth/oauth/yahoo/callback",
+          },
+        },
+      }),
+      new JwtService({ secret: "a-test-secret-that-is-long-enough" }),
+      {} as PrismaService,
+      {} as GmailClient,
+      {} as TokenEncryptionService,
+      {} as InboxJobsService,
+    );
+
+    expect(disabledYahooService.availableProviders()).toEqual({
+      providers: {
+        google: { enabled: true },
+        yahoo: { enabled: false },
+      },
+    });
+  });
+
   it("creates a secure Yahoo OAuth authorization URL", async () => {
     const result = await service.startOAuth("yahoo");
     const url = new URL(result.authorizationUrl);
@@ -76,74 +111,11 @@ describe("AuthService", () => {
     expect(url.origin).toBe("https://api.login.yahoo.com");
     expect(url.searchParams.get("client_id")).toBe("yahoo-client-id");
     expect(url.searchParams.get("scope")).toContain("mail-r");
+    expect(url.searchParams.get("scope")).toContain("mail-w");
     expect(url.searchParams.get("state")).toBeTruthy();
     expect(url.searchParams.get("nonce")).toBeTruthy();
     expect(url.searchParams.get("code_challenge")).toBeTruthy();
     expect(url.searchParams.get("code_challenge_method")).toBe("S256");
-  });
-
-  it("verifies and encrypts a Yahoo app password before queueing sync", async () => {
-    const prisma = {
-      user: {
-        findFirst: jest.fn().mockResolvedValue(null),
-        create: jest.fn().mockResolvedValue({
-          id: "user-1",
-          email: "person@yahoo.com",
-        }),
-      },
-      emailAccount: {
-        findFirst: jest.fn().mockResolvedValue(null),
-        create: jest.fn().mockResolvedValue({ id: "yahoo-account-1" }),
-      },
-      appSession: {
-        create: jest.fn().mockResolvedValue({ id: "session-1" }),
-      },
-      auditLog: { create: jest.fn().mockResolvedValue({}) },
-    } as unknown as PrismaService;
-    const encryption = {
-      encrypt: jest.fn().mockReturnValue("encrypted-app-password"),
-    } as unknown as TokenEncryptionService;
-    const inboxJobs = {
-      enqueueScan: jest.fn().mockResolvedValue({ id: "scan-1" }),
-    } as unknown as InboxJobsService;
-    const yahoo = {
-      verify: jest.fn().mockResolvedValue(undefined),
-    } as unknown as YahooImapClient;
-    const yahooService = new AuthService(
-      new ConfigService({ auth: { refreshTokenDays: 30 } }),
-      new JwtService({ secret: "a-test-secret-that-is-long-enough" }),
-      prisma,
-      {} as GmailClient,
-      encryption,
-      inboxJobs,
-      yahoo,
-    );
-
-    await expect(
-      yahooService.connectYahooImap(
-        " Person@Yahoo.com ",
-        "abcd efgh ijkl mnop",
-      ),
-    ).resolves.toMatchObject({
-      status: "AUTHENTICATED",
-      refreshToken: expect.any(String),
-    });
-    expect(yahoo.verify).toHaveBeenCalledWith(
-      "person@yahoo.com",
-      "abcdefghijklmnop",
-    );
-    expect(encryption.encrypt).toHaveBeenCalledWith(
-      "abcdefghijklmnop",
-      "senderwho-yahoo-token:person@yahoo.com",
-    );
-    expect(prisma.emailAccount.create).toHaveBeenCalledWith({
-      data: expect.objectContaining({
-        provider: "YAHOO",
-        refreshTokenEncrypted: "encrypted-app-password",
-        syncStatus: "PENDING",
-      }),
-    });
-    expect(inboxJobs.enqueueScan).toHaveBeenCalledWith("yahoo-account-1");
   });
 
   it("binds reauthentication to the current active app session", async () => {

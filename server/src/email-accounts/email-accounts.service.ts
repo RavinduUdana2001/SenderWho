@@ -12,7 +12,7 @@ import {
   TokenEncryptionService,
   googleProviderTokenContext,
 } from "../common/security/token-encryption.service";
-import { getGoogleAccountRecoveryAction } from "../providers/google-account-recovery";
+import { getEmailAccountRecoveryAction } from "../providers/google-account-recovery";
 
 @Injectable()
 export class EmailAccountsService {
@@ -62,7 +62,8 @@ export class EmailAccountsService {
     return {
       items: accounts.map((account) => ({
         ...account,
-        recoveryAction: getGoogleAccountRecoveryAction(
+        recoveryAction: getEmailAccountRecoveryAction(
+          account.provider,
           account.syncStatus,
           account.lastSyncError,
         ),
@@ -76,9 +77,11 @@ export class EmailAccountsService {
       select: { id: true, provider: true, syncStatus: true },
     });
     if (!account) throw new NotFoundException("Email account was not found.");
+    const providerName =
+      account.provider === EmailProvider.YAHOO ? "Yahoo Mail" : "Gmail";
     if (account.syncStatus === SyncStatus.DISCONNECTED) {
       throw new BadRequestException(
-        "Reconnect this Gmail account before starting a scan.",
+        `Reconnect this ${providerName} account before starting a scan.`,
       );
     }
     await this.prisma.emailAccount.update({
@@ -93,11 +96,11 @@ export class EmailAccountsService {
         where: { id: account.id },
         data: {
           syncStatus: SyncStatus.FAILED,
-          lastSyncError: "The Gmail scan could not be queued.",
+          lastSyncError: `The ${providerName} scan could not be queued.`,
         },
       });
       throw new ServiceUnavailableException(
-        "The Gmail scan could not be queued. Please retry.",
+        `The ${providerName} scan could not be queued. Please retry.`,
       );
     }
     try {

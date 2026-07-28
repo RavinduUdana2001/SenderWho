@@ -243,6 +243,33 @@ class SenderWhoRepository {
     }
   }
 
+  Future<Map<String, bool>> availableAuthProviders() async {
+    if (previewMode) return const {'google': true, 'yahoo': true};
+    final json = await _requestJson(
+      'GET',
+      'auth/providers',
+      authenticated: false,
+      allowRefresh: false,
+      allowStepUp: false,
+    );
+    final providers = json?['providers'];
+    _lastError = null;
+    if (providers is! Map<String, dynamic>) {
+      return const {'google': true, 'yahoo': false};
+    }
+    bool enabled(String provider, {required bool fallback}) {
+      final value = providers[provider];
+      return value is Map<String, dynamic>
+          ? value['enabled'] == true
+          : fallback;
+    }
+
+    return {
+      'google': enabled('google', fallback: true),
+      'yahoo': enabled('yahoo', fallback: false),
+    };
+  }
+
   void cancelOAuth() {
     _oauthAttempt += 1;
     _lastError = 'Sign-in was canceled.';
@@ -487,19 +514,6 @@ class SenderWhoRepository {
 
   Future<bool> startOAuthWithAccountChooser(String provider) {
     return _runOAuth(() => _startOAuth(provider));
-  }
-
-  Future<bool> connectYahooImap(String email, String appPassword) async {
-    await _ensureDeviceId();
-    final response = await _requestJson(
-      'POST',
-      'auth/yahoo/imap/connect',
-      body: {'email': email.trim(), 'appPassword': appPassword},
-      authenticated: false,
-      allowRefresh: false,
-    );
-    if (response == null) return false;
-    return _acceptSession(response);
   }
 
   Future<bool> reauthenticate() => _runOAuth(

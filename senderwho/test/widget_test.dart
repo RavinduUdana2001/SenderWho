@@ -162,27 +162,57 @@ void main() {
     expect(find.text('Connect your inbox'), findsOneWidget);
   });
 
-  testWidgets(
-    'Yahoo connection requests an app password, not a normal password',
-    (tester) async {
-      await setScreenSize(tester, const Size(390, 844));
-      await tester.pumpWidget(
-        MaterialApp(theme: AppTheme.light(), home: const ConnectEmailScreen()),
-      );
-      await tester.pumpAndSettle();
+  testWidgets('Yahoo connection uses the provider OAuth browser flow', (
+    tester,
+  ) async {
+    await setScreenSize(tester, const Size(390, 844));
+    String? requestedProvider;
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: AppTheme.light(),
+        routes: {
+          DashboardScreen.routeName: (_) =>
+              const Scaffold(body: Text('Dashboard')),
+        },
+        home: ConnectEmailScreen(
+          startOAuth: (provider) async {
+            requestedProvider = provider;
+            return true;
+          },
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
 
-      await tester.tap(find.text('Continue with Yahoo'));
-      await tester.pumpAndSettle();
+    await tester.tap(find.text('Continue with Yahoo'));
+    await tester.pumpAndSettle();
 
-      expect(find.text('Connect Yahoo Mail'), findsOneWidget);
-      expect(find.text('Yahoo email'), findsOneWidget);
-      expect(find.text('Generated app password'), findsOneWidget);
-      expect(
-        find.textContaining('Do not enter your normal Yahoo password'),
-        findsOneWidget,
-      );
-    },
-  );
+    expect(requestedProvider, 'yahoo');
+    expect(find.text('Dashboard'), findsOneWidget);
+    expect(find.text('Generated app password'), findsNothing);
+  });
+
+  testWidgets('Yahoo stays hidden until production mailbox access is enabled', (
+    tester,
+  ) async {
+    await setScreenSize(tester, const Size(390, 844));
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: AppTheme.light(),
+        home: ConnectEmailScreen(
+          availableProviders: () async => const {
+            'google': true,
+            'yahoo': false,
+          },
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('Continue with Google'), findsOneWidget);
+    expect(find.text('Continue with Yahoo'), findsNothing);
+    expect(find.textContaining('Securely connect Gmail to'), findsOneWidget);
+  });
 
   testWidgets('Entry screens stay centered on a tall phone', (tester) async {
     await setScreenSize(tester, const Size(430, 932));

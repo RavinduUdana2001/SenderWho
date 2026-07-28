@@ -8,7 +8,7 @@ import {
 } from "../common/mock/senderwho.mock";
 import { PrismaService } from "../database/prisma.service";
 import { InboxHealthService } from "../inbox-health/inbox-health.service";
-import { getGoogleAccountRecoveryAction } from "../providers/google-account-recovery";
+import { getEmailAccountRecoveryAction } from "../providers/google-account-recovery";
 
 @Injectable()
 export class DashboardService {
@@ -91,6 +91,7 @@ export class DashboardService {
         orderBy: { createdAt: "desc" },
         select: {
           id: true,
+          provider: true,
           emailAddress: true,
           syncStatus: true,
           lastSyncedAt: true,
@@ -170,7 +171,8 @@ export class DashboardService {
       sync: latestAccount
         ? {
             ...latestAccount,
-            recoveryAction: getGoogleAccountRecoveryAction(
+            recoveryAction: getEmailAccountRecoveryAction(
+              latestAccount.provider,
               latestAccount.syncStatus,
               latestAccount.lastSyncError,
             ),

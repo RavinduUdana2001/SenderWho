@@ -1,5 +1,5 @@
 import { Injectable, Logger, NotFoundException } from "@nestjs/common";
-import { JobStatus, SyncStatus } from "@prisma/client";
+import { EmailProvider, JobStatus, SyncStatus } from "@prisma/client";
 import {
   TokenEncryptionService,
   googleProviderTokenContext,
@@ -115,6 +115,7 @@ export class UsersService {
           select: {
             refreshTokenEncrypted: true,
             accessTokenEncrypted: true,
+            provider: true,
             providerAccountId: true,
           },
         },
@@ -164,6 +165,10 @@ export class UsersService {
     let providerRevocationsAttempted = 0;
     let providerRevocationsSucceeded = 0;
     for (const account of user.emailAccounts) {
+      // Yahoo currently documents user-managed grant revocation through Yahoo
+      // Account Security, but not an application token-revocation endpoint.
+      // Never submit a Yahoo token to Google's revocation endpoint.
+      if (account.provider !== EmailProvider.GOOGLE) continue;
       const encrypted =
         account.refreshTokenEncrypted ?? account.accessTokenEncrypted;
       if (!encrypted) continue;

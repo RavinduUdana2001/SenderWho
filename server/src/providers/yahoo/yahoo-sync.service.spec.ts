@@ -9,8 +9,6 @@ describe("YahooSyncService", () => {
         findUniqueOrThrow: jest.fn().mockResolvedValue({
           userId: "user-1",
           emailAddress: "person@yahoo.com",
-          providerAccountId: "person@yahoo.com",
-          refreshTokenEncrypted: "encrypted-password",
           backfillPageToken: null,
           backfillComplete: false,
           backfillProcessed: 0,
@@ -18,8 +16,8 @@ describe("YahooSyncService", () => {
         update: jest.fn().mockResolvedValue({}),
       },
     };
-    const encryption = {
-      decrypt: jest.fn().mockReturnValue("generated-app-password"),
+    const yahooTokens = {
+      getAccessToken: jest.fn().mockResolvedValue("oauth-access-token"),
     };
     const yahoo = {
       fetchInboxPage: jest.fn().mockResolvedValue({
@@ -43,8 +41,8 @@ describe("YahooSyncService", () => {
     const service = new YahooSyncService(
       new ConfigService({ gmailSync: { maxMessages: 500 } }),
       prisma as never,
-      encryption as never,
       yahoo as never,
+      yahooTokens as never,
       metadata as never,
     );
 
@@ -55,7 +53,7 @@ describe("YahooSyncService", () => {
     });
     expect(yahoo.fetchInboxPage).toHaveBeenCalledWith(
       "person@yahoo.com",
-      "generated-app-password",
+      "oauth-access-token",
       undefined,
       500,
     );

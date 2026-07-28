@@ -33,8 +33,8 @@ export interface YahooMessageContent {
 export class YahooImapClient {
   constructor(private readonly config: ConfigService) {}
 
-  async verify(email: string, appPassword: string) {
-    const client = this.createClient(email, appPassword, true);
+  async verifyOAuth(email: string, accessToken: string) {
+    const client = this.createClient(email, accessToken, true);
     try {
       await client.connect();
     } catch (error) {
@@ -46,11 +46,11 @@ export class YahooImapClient {
 
   async fetchInboxPage(
     email: string,
-    appPassword: string,
+    accessToken: string,
     beforeUid: number | undefined,
     limit: number,
   ): Promise<YahooMessagePage> {
-    const client = this.createClient(email, appPassword);
+    const client = this.createClient(email, accessToken);
     try {
       await client.connect();
       const mailbox = await client.mailboxOpen("INBOX", { readOnly: true });
@@ -109,7 +109,7 @@ export class YahooImapClient {
 
   async applyMessageAction(
     email: string,
-    appPassword: string,
+    accessToken: string,
     providerMessageId: string,
     action: YahooMessageAction,
   ) {
@@ -119,7 +119,7 @@ export class YahooImapClient {
     if (!parsed) throw new Error("Yahoo message identifier is invalid.");
     const sourceKind = parsed[1];
     const uid = Number(parsed[2]);
-    const client = this.createClient(email, appPassword);
+    const client = this.createClient(email, accessToken);
     try {
       await client.connect();
       const mailboxes = await client.list();
@@ -166,14 +166,14 @@ export class YahooImapClient {
 
   async getMessageContent(
     email: string,
-    appPassword: string,
+    accessToken: string,
     providerMessageId: string,
   ): Promise<YahooMessageContent> {
     const parsedId = /^yahoo-(inbox|archive|trash)-(\d+)$/.exec(
       providerMessageId,
     );
     if (!parsedId) throw new Error("Yahoo message identifier is invalid.");
-    const client = this.createClient(email, appPassword);
+    const client = this.createClient(email, accessToken);
     try {
       await client.connect();
       const mailboxes = await client.list();
@@ -222,12 +222,12 @@ export class YahooImapClient {
     }
   }
 
-  private createClient(email: string, appPassword: string, verifyOnly = false) {
+  private createClient(email: string, accessToken: string, verifyOnly = false) {
     return new ImapFlow({
       host: this.config.get<string>("oauth.yahoo.imapHost")!,
       port: this.config.get<number>("oauth.yahoo.imapPort", 993),
       secure: true,
-      auth: { user: email, pass: appPassword },
+      auth: { user: email, accessToken },
       verifyOnly,
       logger: false,
       disableAutoIdle: true,
@@ -293,7 +293,7 @@ export class YahooImapClient {
       message.includes("login")
     ) {
       return new UnauthorizedException(
-        "Yahoo rejected the email or app password. Generate a new Yahoo app password and try again.",
+        "Yahoo Mail authorization expired or was revoked. Reconnect Yahoo Mail and try again.",
       );
     }
     return new BadGatewayException(

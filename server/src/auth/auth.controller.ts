@@ -19,11 +19,17 @@ import { StartOAuthDto } from "./dto/start-oauth.dto";
 import { Public } from "./public.decorator";
 import { AuthService, SessionContext } from "./auth.service";
 import { Idempotent } from "../common/security/idempotent.decorator";
-import { ConnectYahooImapDto } from "./dto/connect-yahoo-imap.dto";
 
 @Controller("auth")
 export class AuthController {
   constructor(private readonly authService: AuthService) {}
+
+  @Get("providers")
+  @Public()
+  @Throttle({ default: { limit: 60, ttl: 60_000, blockDuration: 60_000 } })
+  availableProviders() {
+    return this.authService.availableProviders();
+  }
 
   @Post("oauth/google/start")
   @Public()
@@ -39,18 +45,6 @@ export class AuthController {
   @Throttle({ default: { limit: 10, ttl: 60_000, blockDuration: 60_000 } })
   startYahooOAuth() {
     return this.authService.startOAuth("yahoo");
-  }
-
-  @Post("yahoo/imap/connect")
-  @Public()
-  @HttpCode(200)
-  @Throttle({ default: { limit: 5, ttl: 60_000, blockDuration: 120_000 } })
-  connectYahooImap(@Body() body: ConnectYahooImapDto, @Req() request: Request) {
-    return this.authService.connectYahooImap(
-      body.email,
-      body.appPassword,
-      sessionContext(request),
-    );
   }
 
   @Post("reauth/google/start")

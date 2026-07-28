@@ -11,6 +11,11 @@ describe("validateEnvironment", () => {
     GOOGLE_CLIENT_SECRET: "google-client-secret",
     GOOGLE_OAUTH_CALLBACK_URL:
       "https://api.senderwho.example/api/v1/auth/oauth/google/callback",
+    YAHOO_CLIENT_ID: "yahoo-client-id",
+    YAHOO_CLIENT_SECRET: "yahoo-client-secret",
+    YAHOO_OAUTH_ENABLED: "true",
+    YAHOO_OAUTH_CALLBACK_URL:
+      "https://api.senderwho.example/api/v1/auth/oauth/yahoo/callback",
     JWT_SECRET: "a-production-jwt-secret-with-at-least-32-characters",
     JWT_EXPIRES_IN: "15m",
     REFRESH_TOKEN_EXPIRES_DAYS: "30",
@@ -26,14 +31,25 @@ describe("validateEnvironment", () => {
     expect(validateEnvironment({ ...production })).toEqual(production);
   });
 
-  it("keeps Yahoo optional when only a callback placeholder exists", () => {
+  it("requires Yahoo OAuth credentials in production", () => {
     expect(() =>
       validateEnvironment({
         ...production,
         YAHOO_CLIENT_ID: "",
         YAHOO_CLIENT_SECRET: "",
-        YAHOO_OAUTH_CALLBACK_URL:
-          "http://localhost:3000/api/v1/auth/oauth/yahoo/callback",
+        YAHOO_OAUTH_CALLBACK_URL: "",
+      }),
+    ).toThrow("must be configured together");
+  });
+
+  it("allows Gmail production while Yahoo approval is pending", () => {
+    expect(() =>
+      validateEnvironment({
+        ...production,
+        YAHOO_OAUTH_ENABLED: "false",
+        YAHOO_CLIENT_ID: "",
+        YAHOO_CLIENT_SECRET: "",
+        YAHOO_OAUTH_CALLBACK_URL: "",
       }),
     ).not.toThrow();
   });

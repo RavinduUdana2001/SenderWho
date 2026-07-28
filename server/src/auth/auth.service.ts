@@ -17,7 +17,14 @@ import {
   Prisma,
   SyncStatus,
 } from "@prisma/client";
-import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
+import {
+  createHash,
+  createPublicKey,
+  randomBytes,
+  timingSafeEqual,
+  verify as verifySignature,
+} from "node:crypto";
+import type { JsonWebKey as CryptoJsonWebKey } from "node:crypto";
 import {
   OAUTH_PKCE_CONTEXT,
   TokenEncryptionService,
@@ -69,6 +76,25 @@ interface YahooUserInfo {
   picture?: string;
 }
 
+interface YahooIdTokenClaims {
+  sub?: string;
+  aud?: string | string[];
+  iss?: string;
+  exp?: number;
+  iat?: number;
+  nonce?: string;
+}
+
+interface YahooJwk {
+  kid?: string;
+  alg?: string;
+  kty?: string;
+  crv?: string;
+  x?: string;
+  y?: string;
+  use?: string;
+}
+
 interface OAuthState {
   purpose?: string;
   provider?: OAuthProvider;
@@ -80,7 +106,7 @@ const GOOGLE_SCOPES = [
   "https://www.googleapis.com/auth/userinfo.email",
   "https://www.googleapis.com/auth/gmail.modify",
 ];
-const YAHOO_SCOPES = ["openid", "email", "profile", "mail-r"];
+const YAHOO_SCOPES = ["openid", "email", "profile", "mail-r", "mail-w"];
 const LOGIN_SESSION_TTL_MS = 10 * 60 * 1_000;
 const OIDC_CLOCK_SKEW_SECONDS = 60;
 
@@ -105,81 +131,13 @@ export class AuthService {
     private readonly yahooImap?: YahooImapClient,
   ) {}
 
-  async connectYahooImap(
-    rawEmail: string,
-    rawAppPassword: string,
-    context: SessionContext = {},
-  ) {
-    if (!this.yahooImap) {
-      throw new ServiceUnavailableException(
-        "Yahoo Mail connection is unavailable.",
-      );
-    }
-    const email = rawEmail.trim().toLowerCase();
-    const appPassword = rawAppPassword.replace(/\s+/g, "");
-    if (appPassword.length < 12) {
-      throw new BadRequestException(
-        "Enter the generated Yahoo app password, not your normal password.",
-      );
-    }
-    await this.yahooImap.verify(email, appPassword);
-
-    let user = await this.prisma.user.findFirst({
-      where: { email, deletedAt: null },
-      select: { id: true, email: true },
-    });
-    if (!user) {
-      user = await this.prisma.user.create({
-        data: { email },
-        select: { id: true, email: true },
-      });
-    }
-    const existingAccount = await this.prisma.emailAccount.findFirst({
-      where: { provider: EmailProvider.YAHOO, emailAddress: email },
-      select: { id: true, providerAccountId: true },
-    });
-    const providerAccountId = existingAccount?.providerAccountId ?? email;
-    const encryptedPassword = this.tokenEncryption.encrypt(
-      appPassword,
-      yahooProviderTokenContext(providerAccountId),
-    );
-    const account = existingAccount
-      ? await this.prisma.emailAccount.update({
-          where: { id: existingAccount.id },
-          data: {
-            userId: user.id,
-            emailAddress: email,
-            accessTokenEncrypted: null,
-            refreshTokenEncrypted: encryptedPassword,
-            tokenExpiresAt: null,
-            scopes: ["imap"],
-            syncStatus: SyncStatus.PENDING,
-            lastSyncError: null,
-            backfillPageToken: null,
-            backfillComplete: false,
-            backfillProcessed: 0,
-          },
-        })
-      : await this.prisma.emailAccount.create({
-          data: {
-            userId: user.id,
-            provider: EmailProvider.YAHOO,
-            providerAccountId,
-            emailAddress: email,
-            refreshTokenEncrypted: encryptedPassword,
-            scopes: ["imap"],
-            syncStatus: SyncStatus.PENDING,
-          },
-        });
-    await this.inboxJobs.enqueueScan(account.id);
-    await this.safeAudit({
-      userId: user.id,
-      action: "email_account.connected",
-      targetType: "EmailAccount",
-      targetId: account.id,
-      metadata: { provider: EmailProvider.YAHOO, method: "IMAP_APP_PASSWORD" },
-    });
-    return this.createAuthenticatedSession(user, context);
+  availableProviders() {
+    return {
+      providers: {
+        google: { enabled: true },
+        yahoo: { enabled: this.isYahooOAuthEnabled() },
+      },
+    };
   }
 
   async startOAuth(
@@ -1074,6 +1032,11 @@ export class AuthService {
   }
 
   private getYahooConfig() {
+    if (!this.isYahooOAuthEnabled()) {
+      throw new ServiceUnavailableException(
+        "Yahoo sign-in is not available yet.",
+      );
+    }
     const clientId = this.config.get<string>("oauth.yahoo.clientId");
     const clientSecret = this.config.get<string>("oauth.yahoo.clientSecret");
     const callbackUrl = this.config.get<string>("oauth.yahoo.callbackUrl");
@@ -1083,6 +1046,15 @@ export class AuthService {
       );
     }
     return { clientId, clientSecret, callbackUrl };
+  }
+
+  private isYahooOAuthEnabled() {
+    return (
+      this.config.get<boolean>("oauth.yahoo.enabled", false) === true &&
+      Boolean(this.config.get<string>("oauth.yahoo.clientId")) &&
+      Boolean(this.config.get<string>("oauth.yahoo.clientSecret")) &&
+      Boolean(this.config.get<string>("oauth.yahoo.callbackUrl"))
+    );
   }
 
   private async handleYahooOAuthCallback(
@@ -1137,6 +1109,14 @@ export class AuthService {
           "Yahoo did not return an OAuth access token.",
         );
       }
+      if (!tokens.id_token) {
+        throw new BadGatewayException("Yahoo did not return an ID token.");
+      }
+      const verifiedIdentity = await this.validateYahooIdToken(
+        tokens.id_token,
+        yahoo.clientId,
+        loginSession.nonceHash,
+      );
       let identityResponse: Response;
       try {
         identityResponse = await fetch(
@@ -1158,7 +1138,8 @@ export class AuthService {
       if (
         !identity.sub ||
         !identity.email ||
-        identity.email_verified !== true
+        identity.email_verified !== true ||
+        identity.sub !== verifiedIdentity.sub
       ) {
         throw new UnauthorizedException(
           "Yahoo did not return a verified account identity.",
@@ -1176,6 +1157,23 @@ export class AuthService {
       }
 
       const normalizedEmail = identity.email.trim().toLowerCase();
+      const grantedScopes = (tokens.scope ?? YAHOO_SCOPES.join(" "))
+        .split(/[ ,]+/)
+        .filter(Boolean);
+      const missingMailScopes = ["mail-r", "mail-w"].filter(
+        (scope) => !grantedScopes.includes(scope),
+      );
+      if (missingMailScopes.length > 0) {
+        throw new UnauthorizedException(
+          "Yahoo did not grant the required read and write mail permissions.",
+        );
+      }
+      if (!this.yahooImap) {
+        throw new ServiceUnavailableException(
+          "Yahoo Mail connection is unavailable.",
+        );
+      }
+      await this.yahooImap.verifyOAuth(normalizedEmail, tokens.access_token);
       let user = await this.prisma.user.findFirst({
         where: {
           deletedAt: null,
@@ -1209,60 +1207,70 @@ export class AuthService {
       }
 
       const tokenContext = yahooProviderTokenContext(identity.sub);
-      const account = await this.prisma.emailAccount.upsert({
+      const yahooCredentials = {
+        userId: user.id,
+        providerAccountId: identity.sub,
+        emailAddress: normalizedEmail,
+        displayName: identity.name,
+        accessTokenEncrypted: this.tokenEncryption.encrypt(
+          tokens.access_token,
+          tokenContext,
+        ),
+        refreshTokenEncrypted: this.tokenEncryption.encrypt(
+          tokens.refresh_token,
+          tokenContext,
+        ),
+        tokenExpiresAt: tokens.expires_in
+          ? new Date(Date.now() + tokens.expires_in * 1_000)
+          : null,
+        scopes: grantedScopes,
+        syncStatus: SyncStatus.PENDING,
+        lastSyncError: null,
+      };
+      const existingYahooAccount = await this.prisma.emailAccount.findFirst({
         where: {
-          provider_providerAccountId: {
-            provider: EmailProvider.YAHOO,
-            providerAccountId: identity.sub,
-          },
-        },
-        create: {
-          userId: user.id,
           provider: EmailProvider.YAHOO,
-          providerAccountId: identity.sub,
-          emailAddress: normalizedEmail,
-          displayName: identity.name,
-          accessTokenEncrypted: this.tokenEncryption.encrypt(
-            tokens.access_token,
-            tokenContext,
-          ),
-          refreshTokenEncrypted: this.tokenEncryption.encrypt(
-            tokens.refresh_token,
-            tokenContext,
-          ),
-          tokenExpiresAt: tokens.expires_in
-            ? new Date(Date.now() + tokens.expires_in * 1_000)
-            : null,
-          scopes: (tokens.scope ?? YAHOO_SCOPES.join(" "))
-            .split(/[ ,]+/)
-            .filter(Boolean),
-          syncStatus: SyncStatus.FAILED,
-          lastSyncError:
-            "Yahoo login succeeded, but Yahoo mailbox scanning is not available until Yahoo mail access is approved and configured.",
+          OR: [
+            { providerAccountId: identity.sub },
+            { emailAddress: normalizedEmail },
+          ],
         },
-        update: {
-          userId: user.id,
-          emailAddress: normalizedEmail,
-          displayName: identity.name,
-          accessTokenEncrypted: this.tokenEncryption.encrypt(
-            tokens.access_token,
-            tokenContext,
-          ),
-          refreshTokenEncrypted: this.tokenEncryption.encrypt(
-            tokens.refresh_token,
-            tokenContext,
-          ),
-          tokenExpiresAt: tokens.expires_in
-            ? new Date(Date.now() + tokens.expires_in * 1_000)
-            : null,
-          scopes: (tokens.scope ?? YAHOO_SCOPES.join(" "))
-            .split(/[ ,]+/)
-            .filter(Boolean),
-          syncStatus: SyncStatus.FAILED,
-          lastSyncError:
-            "Yahoo login succeeded, but Yahoo mailbox scanning is not available until Yahoo mail access is approved and configured.",
-        },
+        select: { id: true },
       });
+      const account = existingYahooAccount
+        ? await this.prisma.emailAccount.update({
+            where: { id: existingYahooAccount.id },
+            data: {
+              ...yahooCredentials,
+              backfillPageToken: null,
+              backfillComplete: false,
+              backfillProcessed: 0,
+            },
+          })
+        : await this.prisma.emailAccount.create({
+            data: {
+              ...yahooCredentials,
+              provider: EmailProvider.YAHOO,
+            },
+          });
+      let syncJob:
+        | { jobId?: string; status: "QUEUED" }
+        | { status: "FAILED"; error: string };
+      try {
+        syncJob = await this.inboxJobs.enqueueScan(account.id);
+      } catch {
+        await this.prisma.emailAccount.update({
+          where: { id: account.id },
+          data: {
+            syncStatus: SyncStatus.FAILED,
+            lastSyncError: "The initial scan could not be queued.",
+          },
+        });
+        syncJob = {
+          status: "FAILED",
+          error: "The initial scan could not be queued. Retry from the app.",
+        };
+      }
       await this.prisma.oAuthLoginSession.update({
         where: { id: loginSession.id },
         data: { userId: user.id, status: OAuthLoginStatus.COMPLETED },
@@ -1272,7 +1280,7 @@ export class AuthService {
         action: "email_account.connected",
         targetType: "EmailAccount",
         targetId: account.id,
-        metadata: { provider: EmailProvider.YAHOO },
+        metadata: { provider: EmailProvider.YAHOO, method: "OAUTH2_IMAP" },
       });
       return {
         success: true,
@@ -1281,6 +1289,7 @@ export class AuthService {
         emailAccountId: account.id,
         persisted: true,
         reauthenticated: false,
+        syncJob,
       };
     } catch (error) {
       await this.prisma.oAuthLoginSession.updateMany({
@@ -1330,6 +1339,103 @@ export class AuthService {
     }
 
     return (await response.json()) as GoogleTokenResponse;
+  }
+
+  private async validateYahooIdToken(
+    idToken: string,
+    expectedAudience: string,
+    expectedNonceHash: string,
+  ): Promise<YahooIdTokenClaims> {
+    const parts = idToken.split(".");
+    if (parts.length !== 3) {
+      throw new UnauthorizedException("Yahoo identity token is invalid.");
+    }
+    let header: { alg?: string; kid?: string };
+    let claims: YahooIdTokenClaims;
+    try {
+      header = JSON.parse(
+        Buffer.from(parts[0], "base64url").toString("utf8"),
+      ) as { alg?: string; kid?: string };
+      claims = JSON.parse(
+        Buffer.from(parts[1], "base64url").toString("utf8"),
+      ) as YahooIdTokenClaims;
+    } catch {
+      throw new UnauthorizedException("Yahoo identity token is invalid.");
+    }
+    if (header.alg !== "ES256" || !header.kid) {
+      throw new UnauthorizedException(
+        "Yahoo identity token uses an unsupported signature.",
+      );
+    }
+
+    let keys: YahooJwk[];
+    try {
+      const response = await fetch(
+        "https://api.login.yahoo.com/openid/v1/certs",
+        { signal: AbortSignal.timeout(15_000) },
+      );
+      if (!response.ok) {
+        throw new Error(`Yahoo keys returned ${response.status}`);
+      }
+      const document = (await response.json()) as { keys?: YahooJwk[] };
+      keys = document.keys ?? [];
+    } catch {
+      throw new BadGatewayException(
+        "Could not validate the Yahoo account identity.",
+      );
+    }
+    const jwk = keys.find(
+      (key) =>
+        key.kid === header.kid &&
+        key.alg === "ES256" &&
+        key.kty === "EC" &&
+        key.crv === "P-256" &&
+        key.x &&
+        key.y,
+    );
+    if (!jwk) {
+      throw new UnauthorizedException(
+        "Yahoo identity signing key is unavailable.",
+      );
+    }
+    let signatureValid = false;
+    try {
+      const publicKey = createPublicKey({
+        key: jwk as CryptoJsonWebKey,
+        format: "jwk",
+      });
+      signatureValid = verifySignature(
+        "sha256",
+        Buffer.from(`${parts[0]}.${parts[1]}`),
+        { key: publicKey, dsaEncoding: "ieee-p1363" },
+        Buffer.from(parts[2], "base64url"),
+      );
+    } catch {
+      signatureValid = false;
+    }
+
+    const now = Math.floor(Date.now() / 1_000);
+    const audienceMatches = Array.isArray(claims.aud)
+      ? claims.aud.includes(expectedAudience)
+      : claims.aud === expectedAudience;
+    if (
+      !signatureValid ||
+      claims.iss !== "https://api.login.yahoo.com" ||
+      !audienceMatches ||
+      !claims.sub ||
+      !claims.nonce ||
+      this.hashToken(claims.nonce) !== expectedNonceHash ||
+      !Number.isFinite(claims.exp) ||
+      claims.exp! < now - OIDC_CLOCK_SKEW_SECONDS ||
+      !Number.isFinite(claims.iat) ||
+      claims.iat! > now + OIDC_CLOCK_SKEW_SECONDS ||
+      claims.iat! < now - 3_600 - OIDC_CLOCK_SKEW_SECONDS
+    ) {
+      throw new UnauthorizedException(
+        "Yahoo identity claims are invalid or expired.",
+      );
+    }
+    return claims;
   }
 
   private async validateGoogleIdToken(

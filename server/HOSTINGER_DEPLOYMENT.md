@@ -12,7 +12,12 @@
 6. Connect `api.yourdomain.com` in the application dashboard and wait for SSL.
 7. Add the exact Google OAuth redirect URI
    `https://api.yourdomain.com/api/v1/auth/oauth/google/callback`.
-8. Redeploy, then verify `/api/v1/health/live` and `/api/v1/health/ready`.
+8. Leave `YAHOO_OAUTH_ENABLED=false` until Yahoo has approved `mail-r` and
+   `mail-w`. This keeps Yahoo hidden without affecting Gmail. After approval,
+   add the Yahoo Client ID, rotated Client Secret, exact callback URL, and set
+   the flag to `true`.
+9. Redeploy, then verify `/api/v1/health/live`, `/api/v1/health/ready`, and
+   `/api/v1/auth/providers`.
 
 `main.js` applies committed Prisma migrations before starting the
 API. The ready endpoint must show `mysql` and `databaseQueue` as `up`. This
