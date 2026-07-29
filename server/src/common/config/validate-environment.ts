@@ -7,6 +7,23 @@ export function validateEnvironment(environment: Environment): Environment {
   ) {
     throw new Error("MOCK_DATA_ENABLED must never be true in production.");
   }
+  const publicSupportEmail = environment.PUBLIC_SUPPORT_EMAIL?.trim();
+  if (
+    publicSupportEmail &&
+    !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(publicSupportEmail)
+  ) {
+    throw new Error("PUBLIC_SUPPORT_EMAIL must be a valid email address.");
+  }
+  const publicEffectiveDate = environment.PUBLIC_LEGAL_EFFECTIVE_DATE?.trim();
+  if (
+    publicEffectiveDate &&
+    (!/^\d{4}-\d{2}-\d{2}$/.test(publicEffectiveDate) ||
+      Number.isNaN(new Date(`${publicEffectiveDate}T00:00:00Z`).getTime()))
+  ) {
+    throw new Error(
+      "PUBLIC_LEGAL_EFFECTIVE_DATE must use the YYYY-MM-DD format.",
+    );
+  }
   if (environment.MOCK_DATA_ENABLED === "true") return environment;
 
   requireValue(environment, "DATABASE_URL");

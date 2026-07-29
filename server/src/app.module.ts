@@ -27,6 +27,7 @@ import { MysqlThrottlerStorage } from "./common/security/mysql-throttler.storage
 import { PrismaService } from "./database/prisma.service";
 import { IdempotencyInterceptor } from "./common/security/idempotency.interceptor";
 import { SecurityLoggingInterceptor } from "./common/security/security-logging.interceptor";
+import { PublicSiteModule } from "./public-site/public-site.module";
 
 @Module({
   imports: [
@@ -75,6 +76,7 @@ import { SecurityLoggingInterceptor } from "./common/security/security-logging.i
     PrivacySecurityModule,
     CleanupModule,
     UnsubscribeModule,
+    PublicSiteModule,
   ],
   controllers: [HealthController],
   providers: [

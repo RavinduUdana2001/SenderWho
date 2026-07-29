@@ -14,6 +14,12 @@ export default () => ({
       process.env.SWAGGER_ENABLED === "true" ||
       (process.env.NODE_ENV ?? "development") !== "production",
   },
+  publicSite: {
+    legalName: process.env.PUBLIC_LEGAL_NAME?.trim() || "SenderWho",
+    supportEmail: process.env.PUBLIC_SUPPORT_EMAIL?.trim() || "",
+    effectiveDate:
+      process.env.PUBLIC_LEGAL_EFFECTIVE_DATE?.trim() || "2026-07-29",
+  },
   databaseUrl: process.env.DATABASE_URL,
   auth: {
     jwtSecret: process.env.JWT_SECRET,

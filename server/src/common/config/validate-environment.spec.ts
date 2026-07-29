@@ -31,6 +31,28 @@ describe("validateEnvironment", () => {
     expect(validateEnvironment({ ...production })).toEqual(production);
   });
 
+  it("validates optional public-site contact details", () => {
+    expect(() =>
+      validateEnvironment({
+        ...production,
+        PUBLIC_SUPPORT_EMAIL: "support@senderwho.com",
+        PUBLIC_LEGAL_EFFECTIVE_DATE: "2026-07-29",
+      }),
+    ).not.toThrow();
+    expect(() =>
+      validateEnvironment({
+        ...production,
+        PUBLIC_SUPPORT_EMAIL: "not-an-email",
+      }),
+    ).toThrow("PUBLIC_SUPPORT_EMAIL must be a valid email address");
+    expect(() =>
+      validateEnvironment({
+        ...production,
+        PUBLIC_LEGAL_EFFECTIVE_DATE: "29/07/2026",
+      }),
+    ).toThrow("must use the YYYY-MM-DD format");
+  });
+
   it("requires Yahoo OAuth credentials in production", () => {
     expect(() =>
       validateEnvironment({

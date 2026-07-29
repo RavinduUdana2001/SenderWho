@@ -1,4 +1,4 @@
-import { ValidationPipe } from "@nestjs/common";
+import { RequestMethod, ValidationPipe } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
 import { NestFactory } from "@nestjs/core";
 import { DocumentBuilder, SwaggerModule } from "@nestjs/swagger";
@@ -52,7 +52,15 @@ async function bootstrap() {
   const expressApp = app.getHttpAdapter().getInstance();
   expressApp.set("trust proxy", trustedProxyHops);
 
-  app.setGlobalPrefix(apiPrefix);
+  app.setGlobalPrefix(apiPrefix, {
+    exclude: [
+      { path: "/", method: RequestMethod.GET },
+      { path: "privacy", method: RequestMethod.GET },
+      { path: "terms", method: RequestMethod.GET },
+      { path: "support", method: RequestMethod.GET },
+      { path: "delete-account", method: RequestMethod.GET },
+    ],
+  });
   app.use(
     helmet({
       contentSecurityPolicy: {

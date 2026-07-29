@@ -44,6 +44,9 @@ adapter to avoid native query-engine crashes on shared hosting.
 Copy every key from `.env.hostinger-shared.example` into hPanel's Environment
 Variables section, replace placeholders, and do not upload a real `.env` file.
 Do not manually set `PORT`; Hostinger supplies it to the application.
+Set `PUBLIC_LEGAL_NAME` to the owner/company name and
+`PUBLIC_SUPPORT_EMAIL` to a real monitored support address. These values are
+shown on the public privacy, terms, support, and account-deletion pages.
 
 Generate secrets locally:
 
@@ -69,6 +72,11 @@ restart/redeploy the application.
 Open:
 
 ```text
+https://senderwho.com/
+https://senderwho.com/privacy
+https://senderwho.com/terms
+https://senderwho.com/support
+https://senderwho.com/delete-account
 https://senderwho.com/api/v1/health/live
 https://senderwho.com/api/v1/health/ready
 ```
