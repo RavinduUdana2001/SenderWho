@@ -39,12 +39,12 @@ These are required because Google/Yahoo users must see who is asking for mailbox
 
 ### Backend Details
 
-- Production API URL, for example `https://api.senderwho.com`
+- Production API URL: `https://senderwho.com`
 - OAuth callback URLs:
 
 ```text
-https://api.senderwho.com/api/v1/auth/oauth/google/callback
-https://api.senderwho.com/api/v1/auth/oauth/yahoo/callback
+https://senderwho.com/api/v1/auth/oauth/google/callback
+https://senderwho.com/api/v1/auth/oauth/yahoo/callback
 ```
 
 - Staging callback URLs if there is a staging backend
@@ -69,7 +69,7 @@ Environment values:
 ```text
 GOOGLE_CLIENT_ID=
 GOOGLE_CLIENT_SECRET=
-GOOGLE_OAUTH_CALLBACK_URL=https://api.senderwho.com/api/v1/auth/oauth/google/callback
+GOOGLE_OAUTH_CALLBACK_URL=https://senderwho.com/api/v1/auth/oauth/google/callback
 ```
 
 ### Recommended Gmail Permission Plan
@@ -117,7 +117,7 @@ The client must provide one application-wide credential pair:
 YAHOO_OAUTH_ENABLED=false
 YAHOO_CLIENT_ID=
 YAHOO_CLIENT_SECRET=
-YAHOO_OAUTH_CALLBACK_URL=https://api.senderwho.com/api/v1/auth/oauth/yahoo/callback
+YAHOO_OAUTH_CALLBACK_URL=https://senderwho.com/api/v1/auth/oauth/yahoo/callback
 ```
 
 Request `openid`, `email`, `profile`, `mail-r`, and `mail-w`. See the

@@ -14,7 +14,7 @@ SenderWho. Users never create or enter app passwords.
 4. Configure this exact redirect URI:
 
    ```text
-   https://lightcyan-sheep-166645.hostingersite.com/api/v1/auth/oauth/yahoo/callback
+   https://senderwho.com/api/v1/auth/oauth/yahoo/callback
    ```
 
 5. Request these delegated permissions:
@@ -44,7 +44,7 @@ Add these server environment values:
 YAHOO_OAUTH_ENABLED=false
 YAHOO_CLIENT_ID=<Yahoo Consumer Key>
 YAHOO_CLIENT_SECRET=<Yahoo Consumer Secret>
-YAHOO_OAUTH_CALLBACK_URL=https://lightcyan-sheep-166645.hostingersite.com/api/v1/auth/oauth/yahoo/callback
+YAHOO_OAUTH_CALLBACK_URL=https://senderwho.com/api/v1/auth/oauth/yahoo/callback
 YAHOO_IMAP_HOST=imap.mail.yahoo.com
 YAHOO_IMAP_PORT=993
 ```

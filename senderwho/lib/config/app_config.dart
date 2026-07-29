@@ -1,8 +1,7 @@
 import 'package:flutter/foundation.dart';
 
 abstract final class AppConfig {
-  static const productionApiBaseUrl =
-      'https://lightcyan-sheep-166645.hostingersite.com/api/v1';
+  static const productionApiBaseUrl = 'https://senderwho.com/api/v1';
 
   static const apiBaseUrl = String.fromEnvironment(
     'SENDERWHO_API_URL',

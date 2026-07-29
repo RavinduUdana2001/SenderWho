@@ -9,9 +9,9 @@
    `main.js`.
 5. Copy the keys from `.env.hostinger-shared.example` into hPanel Environment
    Variables. Replace every placeholder and do not set `PORT` manually.
-6. Connect `api.yourdomain.com` in the application dashboard and wait for SSL.
+6. Connect `senderwho.com` in the application dashboard and wait for SSL.
 7. Add the exact Google OAuth redirect URI
-   `https://api.yourdomain.com/api/v1/auth/oauth/google/callback`.
+   `https://senderwho.com/api/v1/auth/oauth/google/callback`.
 8. Leave `YAHOO_OAUTH_ENABLED=false` until Yahoo has approved `mail-r` and
    `mail-w`. This keeps Yahoo hidden without affecting Gmail. After approval,
    add the Yahoo Client ID, rotated Client Secret, exact callback URL, and set

@@ -49,11 +49,11 @@ openssl rand -base64 32
 
 ## 4. Domain and Google OAuth
 
-Connect `api.yourdomain.com` to the Node.js application in hPanel. After SSL is
+Connect `senderwho.com` to the Node.js application in hPanel. After SSL is
 active, add this exact redirect URI to the Google Cloud Web OAuth client:
 
 ```text
-https://api.yourdomain.com/api/v1/auth/oauth/google/callback
+https://senderwho.com/api/v1/auth/oauth/google/callback
 ```
 
 Update the domain in `CORS_ORIGINS` and `GOOGLE_OAUTH_CALLBACK_URL`, then
@@ -64,8 +64,8 @@ restart/redeploy the application.
 Open:
 
 ```text
-https://api.yourdomain.com/api/v1/health/live
-https://api.yourdomain.com/api/v1/health/ready
+https://senderwho.com/api/v1/health/live
+https://senderwho.com/api/v1/health/ready
 ```
 
 The ready response must show both `mysql` and `databaseQueue` as `up`. Then log
