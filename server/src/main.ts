@@ -9,15 +9,37 @@ import { json, urlencoded } from "express";
 import helmet from "helmet";
 import { applyMysqlMigrations } from "./common/database/mysql-migrations";
 
+let startupPhase = "bootstrap";
+
 async function bootstrap() {
+  startupPhase = "database-configuration";
   configureHostingerDatabaseUrl();
+  startupPhase = "database-tcp-check";
   await checkDatabaseTcpConnection();
-  console.log(JSON.stringify({ event: "application.starting" }));
+  console.log(
+    JSON.stringify({
+      event: "application.starting",
+      nodeVersion: process.version,
+      platform: process.platform,
+      architecture: process.arch,
+      databaseEngine: "prisma-client",
+      databaseAdapter: "mariadb",
+    }),
+  );
+  startupPhase = "application-module-import";
   const { AppModule } = await import("./app.module");
+  startupPhase = "application-creation";
   const app = await NestFactory.create(AppModule, {
     bufferLogs: true,
     bodyParser: false,
   });
+  if (process.env.NODE_ENV === "production") {
+    startupPhase = "database-migrations";
+    console.log(JSON.stringify({ event: "database.migrations.starting" }));
+    await applyMysqlMigrations();
+    console.log(JSON.stringify({ event: "database.migrations.completed" }));
+  }
+  startupPhase = "application-configuration";
   const config = app.get(ConfigService);
   const apiPrefix = config.get<string>("apiPrefix", "api/v1");
   const corsOrigins = config.get<string[]>("corsOrigins", []);
@@ -100,15 +122,12 @@ async function bootstrap() {
   }
 
   const port = config.get<number>("port", 3000);
+  startupPhase = "http-listen";
   await app.listen(port, "0.0.0.0");
   console.log(
     JSON.stringify({ event: "application.listening", host: "0.0.0.0", port }),
   );
-  if (process.env.NODE_ENV === "production") {
-    console.log(JSON.stringify({ event: "database.migrations.starting" }));
-    await applyMysqlMigrations();
-    console.log(JSON.stringify({ event: "database.migrations.completed" }));
-  }
+  startupPhase = "ready";
   console.log(JSON.stringify({ event: "application.ready" }));
 }
 
@@ -128,7 +147,14 @@ void bootstrap().catch((error: unknown) => {
     );
   }
   console.error(
-    JSON.stringify({ event: "application.startup_failed", ...details }),
+    JSON.stringify({
+      event: "application.startup_failed",
+      phase: startupPhase,
+      nodeVersion: process.version,
+      platform: process.platform,
+      architecture: process.arch,
+      ...details,
+    }),
   );
   process.exit(1);
 });

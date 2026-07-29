@@ -7,7 +7,9 @@
 3. Select Node.js 22 and NestJS (or Other).
 4. Use `npm run build`, output directory `dist`, and entry file
    `main.js`.
-5. Copy the keys from `.env.hostinger-shared.example` into hPanel Environment
+5. Add `DB_HOST=localhost`, `DB_PORT=3306`, your exact `DB_USER`,
+   `DB_PASSWORD`, and `DB_NAME`, plus `DB_CONNECTION_LIMIT=5`. Copy the
+   remaining keys from `.env.hostinger-shared.example` into hPanel Environment
    Variables. Replace every placeholder and do not set `PORT` manually.
 6. Connect `senderwho.com` in the application dashboard and wait for SSL.
 7. Add the exact Google OAuth redirect URI
@@ -19,6 +21,8 @@
 9. Redeploy, then verify `/api/v1/health/live`, `/api/v1/health/ready`, and
    `/api/v1/auth/providers`.
 
-`main.js` applies committed Prisma migrations before starting the
-API. The ready endpoint must show `mysql` and `databaseQueue` as `up`. This
-release uses MySQL for durable jobs and API throttling; Redis is not required.
+`main.js` applies committed Prisma migrations before starting the API. This
+release uses Prisma's JavaScript MariaDB adapter, avoiding the native query
+engine timer panic on shared hosting. The ready endpoint must show `mysql` and
+`databaseQueue` as `up`. MySQL provides durable jobs and API throttling; Redis
+is not required.

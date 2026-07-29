@@ -91,6 +91,12 @@ describe("validateEnvironment", () => {
         GMAIL_SYNC_CONCURRENCY: "20",
       }),
     ).toThrow("GMAIL_SYNC_CONCURRENCY must be an integer from 1 to 8");
+    expect(() =>
+      validateEnvironment({
+        ...production,
+        DB_CONNECTION_LIMIT: "20",
+      }),
+    ).toThrow("DB_CONNECTION_LIMIT must be an integer from 1 to 10");
   });
 
   it("requires certificate-validated MySQL transport by default", () => {

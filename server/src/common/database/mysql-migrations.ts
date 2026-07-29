@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import path from "node:path";
 import { PrismaClient } from "@prisma/client";
+import { createPrismaAdapter } from "../../database/prisma-adapter";
 
 const MIGRATION_LOCK = "senderwho_schema_migrations";
 
@@ -19,7 +20,7 @@ export async function applyMysqlMigrations(): Promise<void> {
     throw new Error(`Packaged migrations are missing at ${migrationsPath}.`);
   }
 
-  const prisma = new PrismaClient();
+  const prisma = new PrismaClient({ adapter: createPrismaAdapter() });
   console.log(JSON.stringify({ event: "database.connection.starting" }));
   let lockAcquired = false;
   try {

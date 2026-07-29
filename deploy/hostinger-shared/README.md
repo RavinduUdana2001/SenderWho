@@ -6,14 +6,17 @@ API rate limiting with Hostinger MySQL. It does not require Redis or Docker.
 ## 1. Create MySQL
 
 In hPanel, open `Databases -> MySQL Databases`, create a database and user, and
-save the database name, username, password, and host. The host must be
-`localhost` for this deployment mode.
-
-Use URL-safe characters in the password, or percent-encode it when constructing
-`DATABASE_URL`:
+save the database name, username, password, and host. Use these separate hPanel
+environment variables so passwords containing special characters are handled
+safely:
 
 ```text
-mysql://DB_USER:ENCODED_PASSWORD@localhost:3306/DB_NAME
+DB_HOST=localhost
+DB_PORT=3306
+DB_USER=your Hostinger database user
+DB_PASSWORD=your exact Hostinger database password
+DB_NAME=your Hostinger database name
+DB_CONNECTION_LIMIT=5
 ```
 
 ## 2. Create the Node.js application
@@ -31,8 +34,10 @@ Output directory: dist
 Entry file: main.js
 ```
 
-`main.js` runs `prisma migrate deploy` safely before starting the
-API, so the schema is upgraded on each release without manual phpMyAdmin SQL.
+`main.js` takes a MySQL advisory lock and applies packaged migrations before
+opening the HTTP listener, so the schema is upgraded safely on each release
+without manual phpMyAdmin SQL. The runtime uses Prisma's JavaScript MariaDB
+adapter to avoid native query-engine crashes on shared hosting.
 
 ## 3. Add environment variables
 

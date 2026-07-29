@@ -80,6 +80,7 @@ export function validateEnvironment(environment: Environment): Environment {
     );
     validateIntegerRange(environment, "GMAIL_SYNC_BATCH_SIZE", 5, 25, 20);
     validateIntegerRange(environment, "GMAIL_SYNC_CONCURRENCY", 1, 8, 5);
+    validateIntegerRange(environment, "DB_CONNECTION_LIMIT", 1, 10, 5);
     const databaseUrl = new URL(environment.DATABASE_URL!);
     const privateDockerDataServices =
       environment.ALLOW_PRIVATE_DOCKER_DATA_SERVICES === "true";
