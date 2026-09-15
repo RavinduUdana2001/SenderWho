@@ -152,6 +152,25 @@ export class DatabaseJobQueueService {
     });
   }
 
+  async cancel(id: string) {
+    if (this.prisma.mockDataEnabled) return true;
+    const result = await this.prisma.backgroundJob.updateMany({
+      where: {
+        id,
+        status: {
+          in: [BackgroundJobStatus.QUEUED, BackgroundJobStatus.RUNNING],
+        },
+      },
+      data: {
+        status: BackgroundJobStatus.CANCELED,
+        completedAt: new Date(),
+        leaseOwner: null,
+        leaseExpiresAt: null,
+      },
+    });
+    return result.count === 1;
+  }
+
   async recoverExpiredLeases(now = new Date()) {
     if (this.prisma.mockDataEnabled) return 0;
     const result = await this.prisma.backgroundJob.updateMany({

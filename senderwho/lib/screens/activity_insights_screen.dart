@@ -176,6 +176,7 @@ class _InsightStat extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final resolvedColor = AppColors.foregroundFor(context, color);
     return AppCard(
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 14),
       child: SizedBox(
@@ -189,7 +190,7 @@ class _InsightStat extends StatelessWidget {
               style: Theme.of(context).textTheme.titleLarge?.copyWith(
                 color: statKey == 'emailsReceived'
                     ? AppColors.textFor(context)
-                    : color,
+                    : resolvedColor,
               ),
             ),
             const SizedBox(height: 7),

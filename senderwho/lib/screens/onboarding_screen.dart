@@ -17,7 +17,7 @@ class OnboardingScreen extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.center,
         children: [
           const _BrandMark(),
-          SizedBox(height: context.verticalGap(24)),
+          SizedBox(height: context.verticalGap(20)),
           const _HeroTitle(),
           const SizedBox(height: 12),
           SizedBox(
@@ -28,12 +28,13 @@ class OnboardingScreen extends StatelessWidget {
               style: Theme.of(context).textTheme.bodyMedium,
             ),
           ),
-          SizedBox(height: context.verticalGap(26)),
+          SizedBox(height: context.verticalGap(22)),
           const _FeatureList(),
-          SizedBox(height: context.verticalGap(24)),
+          SizedBox(height: context.verticalGap(20)),
           AppButton(
             label: 'Connect my inbox',
             icon: Icons.arrow_forward_rounded,
+            height: 52,
             onPressed: () =>
                 Navigator.pushNamed(context, ConnectEmailScreen.routeName),
           ),
@@ -153,7 +154,7 @@ class _FeatureList extends StatelessWidget {
             title: features[index].$2,
             subtitle: features[index].$3,
           ),
-          if (index != features.length - 1) const SizedBox(height: 15),
+          if (index != features.length - 1) const SizedBox(height: 13),
         ],
       ],
     );

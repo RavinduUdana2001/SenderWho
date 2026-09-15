@@ -144,6 +144,7 @@ export class SendersService {
       where: { id, userId },
       include: {
         messages: {
+          where: { isTrashed: false },
           take: 25,
           orderBy: { receivedAt: "desc" },
         },

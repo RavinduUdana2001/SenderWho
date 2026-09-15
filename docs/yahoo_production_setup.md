@@ -98,12 +98,44 @@ Verify all of the following with an approved Yahoo test account:
 9. Access tokens refresh automatically without asking the user to sign in.
 10. Disconnect clears local credentials and users can revoke SenderWho from
     Yahoo Account Security.
+11. Mail from a sender blocked in SenderWho is moved to Yahoo Trash on the next
+    sync, matching the Gmail behavior.
+12. A Yahoo-created SenderWho account can complete recent authentication for
+    protected Settings actions without being redirected to Google.
+
+For every write action in steps 6-8 and 11, open the same mailbox in Yahoo Mail
+and confirm the result there. A successful SenderWho API response by itself is
+not sufficient evidence that the provider-side change worked.
+
+## 5. Yahoo approval and production gate
+
+Do not enable the Yahoo button for production users until all of these are true:
+
+- Yahoo has approved the SenderWho application for both `mail-r` and `mail-w`.
+- The Yahoo Developer Network application owner, app name, application URL,
+  privacy-policy URL, and callback URL exactly match the production service.
+- `https://senderwho.com` and `https://senderwho.com/privacy` are public,
+  readable without signing in, and use the same domain submitted to Yahoo.
+- The callback is exactly
+  `https://senderwho.com/api/v1/auth/oauth/yahoo/callback` with no alternate
+  spelling, path, or trailing slash.
+- The approved Client ID and Client Secret are installed only on the backend.
+- A clean Yahoo test account completes the entire acceptance test above.
+- Logs contain no access tokens, refresh tokens, authorization codes, message
+  bodies, or Yahoo passwords.
+- Disconnect, token expiry/revocation, retry, cancellation, and account
+  deletion have been tested in production-like infrastructure.
+
+Keep the Yahoo submission confirmation and approval email with the release
+records. If Yahoo requests clarification, provide a short screen recording that
+shows consent, mailbox scanning, read/unread, archive/restore, Trash/restore,
+cleanup, and the matching changes in the Yahoo source mailbox.
 
 ## Operational notes
 
 - Yahoo OAuth endpoints are server-side; the Client Secret must never be
   embedded in the mobile app.
-- OAuth mail access uses SASL XOAUTH2 with `imap.mail.yahoo.com`, port `993`,
-  and certificate-validated TLS.
+- OAuth mail access uses Yahoo's OAuth bearer authentication with
+  `imap.mail.yahoo.com`, port `993`, and certificate-validated TLS.
 - `mail-r` provides mail read access and `mail-w` provides write access.
 - Yahoo Mail developer access is subject to Yahoo approval and policies.

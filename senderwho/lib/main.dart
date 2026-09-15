@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'config/app_config.dart';
 import 'services/senderwho_repository.dart';
@@ -25,7 +27,9 @@ import 'screens/settings_screen.dart';
 import 'screens/top_senders_screen.dart';
 import 'screens/unsubscribe_screen.dart';
 import 'theme/app_theme.dart';
+import 'theme/app_motion.dart';
 import 'theme/theme_mode_controller.dart';
+import 'theme/theme_preference_store.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -34,11 +38,13 @@ Future<void> main() async {
   final authenticated = previewMode
       ? false
       : await senderWhoRepository.restoreSession();
-  var initialThemeMode = ThemeMode.system;
+  final themePreferenceStore = SecureThemePreferenceStore();
+  var initialThemeMode = await _readSavedTheme(themePreferenceStore);
   if (authenticated) {
     try {
       final settings = await senderWhoRepository.getSettings();
       initialThemeMode = _themeModeFromSetting(settings.theme);
+      await _saveTheme(themePreferenceStore, initialThemeMode);
     } on SenderWhoRequestException {
       // A temporary settings outage must not prevent an authenticated user
       // from opening the app. The settings screen exposes a retry action.
@@ -49,6 +55,7 @@ Future<void> main() async {
       startOAuth: previewMode ? (_) async => true : null,
       initiallyAuthenticated: authenticated,
       initialThemeMode: initialThemeMode,
+      themePreferenceStore: themePreferenceStore,
     ),
   );
 }
@@ -58,12 +65,14 @@ class SenderWhoApp extends StatefulWidget {
     super.key,
     this.startOAuth,
     this.initiallyAuthenticated = false,
-    this.initialThemeMode = ThemeMode.system,
+    this.initialThemeMode = ThemeMode.light,
+    this.themePreferenceStore,
   });
 
   final Future<bool> Function(String provider)? startOAuth;
   final bool initiallyAuthenticated;
   final ThemeMode initialThemeMode;
+  final ThemePreferenceStore? themePreferenceStore;
 
   @override
   State<SenderWhoApp> createState() => _SenderWhoAppState();
@@ -71,12 +80,15 @@ class SenderWhoApp extends StatefulWidget {
 
 class _SenderWhoAppState extends State<SenderWhoApp> {
   late ThemeMode _themeMode;
+  late final ThemePreferenceStore _themePreferenceStore;
   final _navigatorKey = GlobalKey<NavigatorState>();
 
   @override
   void initState() {
     super.initState();
     _themeMode = widget.initialThemeMode;
+    _themePreferenceStore =
+        widget.themePreferenceStore ?? SecureThemePreferenceStore();
     senderWhoRepository.authenticationState.addListener(_handleAuthState);
   }
 
@@ -97,11 +109,18 @@ class _SenderWhoAppState extends State<SenderWhoApp> {
   }
 
   void _setThemeMode(ThemeMode mode) {
+    if (mode == _themeMode) return;
     setState(() => _themeMode = mode);
+    unawaited(_saveTheme(_themePreferenceStore, mode));
   }
 
   @override
   Widget build(BuildContext context) {
+    final reduceMotion = WidgetsBinding
+        .instance
+        .platformDispatcher
+        .accessibilityFeatures
+        .disableAnimations;
     return ThemeModeController(
       mode: _themeMode,
       setThemeMode: _setThemeMode,
@@ -112,6 +131,10 @@ class _SenderWhoAppState extends State<SenderWhoApp> {
         theme: AppTheme.light(),
         darkTheme: AppTheme.dark(),
         themeMode: _themeMode,
+        themeAnimationDuration: reduceMotion
+            ? AppMotion.instant
+            : AppMotion.standard,
+        themeAnimationCurve: AppMotion.emphasized,
         home: widget.initiallyAuthenticated ? null : const OnboardingScreen(),
         initialRoute: widget.initiallyAuthenticated
             ? DashboardScreen.routeName
@@ -158,4 +181,22 @@ ThemeMode _themeModeFromSetting(String value) {
     'Dark' => ThemeMode.dark,
     _ => ThemeMode.system,
   };
+}
+
+Future<ThemeMode> _readSavedTheme(ThemePreferenceStore store) async {
+  try {
+    return await store.read() ?? ThemeMode.light;
+  } on Object {
+    // Theme storage must never make app startup fail. Light mode is the
+    // intentional first-launch fallback; explicit saved choices still win.
+    return ThemeMode.light;
+  }
+}
+
+Future<void> _saveTheme(ThemePreferenceStore store, ThemeMode mode) async {
+  try {
+    await store.write(mode);
+  } on Object {
+    // The visible theme still updates when local persistence is unavailable.
+  }
 }

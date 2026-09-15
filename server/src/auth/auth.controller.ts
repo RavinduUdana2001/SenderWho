@@ -40,11 +40,59 @@ export class AuthController {
     });
   }
 
+  @Post("oauth/microsoft/start")
+  @Public()
+  @Throttle({ default: { limit: 10, ttl: 60_000, blockDuration: 60_000 } })
+  startMicrosoftOAuth(@Body() body?: StartOAuthDto) {
+    return this.authService.startOAuth("microsoft", {
+      loginHint: body?.loginHint,
+    });
+  }
+
   @Post("oauth/yahoo/start")
   @Public()
   @Throttle({ default: { limit: 10, ttl: 60_000, blockDuration: 60_000 } })
   startYahooOAuth() {
     return this.authService.startOAuth("yahoo");
+  }
+
+  @Post("connect/google/start")
+  @Throttle({ default: { limit: 5, ttl: 60_000, blockDuration: 120_000 } })
+  connectGoogleAccount(
+    @CurrentUser("id") userId: string,
+    @CurrentUser("sessionId") sessionId: string,
+    @Body() body?: StartOAuthDto,
+  ) {
+    return this.authService.startAccountConnection(
+      "google",
+      userId,
+      sessionId,
+      body?.loginHint,
+    );
+  }
+
+  @Post("connect/microsoft/start")
+  @Throttle({ default: { limit: 5, ttl: 60_000, blockDuration: 120_000 } })
+  connectMicrosoftAccount(
+    @CurrentUser("id") userId: string,
+    @CurrentUser("sessionId") sessionId: string,
+    @Body() body?: StartOAuthDto,
+  ) {
+    return this.authService.startAccountConnection(
+      "microsoft",
+      userId,
+      sessionId,
+      body?.loginHint,
+    );
+  }
+
+  @Post("connect/yahoo/start")
+  @Throttle({ default: { limit: 5, ttl: 60_000, blockDuration: 120_000 } })
+  connectYahooAccount(
+    @CurrentUser("id") userId: string,
+    @CurrentUser("sessionId") sessionId: string,
+  ) {
+    return this.authService.startAccountConnection("yahoo", userId, sessionId);
   }
 
   @Post("reauth/google/start")
@@ -53,7 +101,29 @@ export class AuthController {
     @CurrentUser("id") userId: string,
     @CurrentUser("sessionId") sessionId: string,
   ) {
-    return this.authService.startReauthentication(userId, sessionId);
+    return this.authService.startReauthentication(userId, sessionId, "google");
+  }
+
+  @Post("reauth/microsoft/start")
+  @Throttle({ default: { limit: 5, ttl: 60_000, blockDuration: 120_000 } })
+  startMicrosoftReauthentication(
+    @CurrentUser("id") userId: string,
+    @CurrentUser("sessionId") sessionId: string,
+  ) {
+    return this.authService.startReauthentication(
+      userId,
+      sessionId,
+      "microsoft",
+    );
+  }
+
+  @Post("reauth/start")
+  @Throttle({ default: { limit: 5, ttl: 60_000, blockDuration: 120_000 } })
+  startIdentityReauthentication(
+    @CurrentUser("id") userId: string,
+    @CurrentUser("sessionId") sessionId: string,
+  ) {
+    return this.authService.startIdentityReauthentication(userId, sessionId);
   }
 
   @Get("oauth/google/callback")
@@ -109,6 +179,60 @@ export class AuthController {
     }
   }
 
+  @Get("oauth/microsoft/callback")
+  @Public()
+  @Throttle({ default: { limit: 20, ttl: 60_000, blockDuration: 60_000 } })
+  @Header("Content-Type", "text/html; charset=utf-8")
+  async handleMicrosoftCallback(
+    @Query("code") code?: string,
+    @Query("state") state?: string,
+    @Query("error") error?: string,
+  ) {
+    if (error) {
+      await this.authService.failOAuthSession(state, error);
+      return oauthResultPage(
+        false,
+        "Connection not completed",
+        error === "access_denied"
+          ? "Microsoft Outlook access was not granted. Return to SenderWho and try again when you are ready."
+          : "Microsoft could not complete authorization. Return to SenderWho and try again.",
+      );
+    }
+    if (!code) {
+      await this.authService.failOAuthSession(
+        state,
+        "Microsoft authorization code is missing.",
+      );
+      return oauthResultPage(
+        false,
+        "Connection not completed",
+        "Microsoft did not return an authorization code. Return to SenderWho and try again.",
+      );
+    }
+    try {
+      const result = await this.authService.handleOAuthCallback(
+        "microsoft",
+        code,
+        state,
+      );
+      return oauthResultPage(
+        true,
+        result.reauthenticated
+          ? "Identity verified"
+          : "Microsoft Outlook connected",
+        result.reauthenticated
+          ? `Recent authentication for ${result.emailAddress} is complete. Return to SenderWho to continue.`
+          : `${result.emailAddress} is now connected. Return to SenderWho to continue.`,
+      );
+    } catch {
+      return oauthResultPage(
+        false,
+        "Could not connect Microsoft Outlook",
+        "SenderWho could not finish the secure Microsoft connection. Return to the app for details and try again.",
+      );
+    }
+  }
+
   @Get("oauth/yahoo/callback")
   @Public()
   @Throttle({ default: { limit: 20, ttl: 60_000, blockDuration: 60_000 } })
@@ -147,8 +271,10 @@ export class AuthController {
       );
       return oauthResultPage(
         true,
-        "Yahoo Mail connected",
-        `${result.emailAddress} is now connected. Return to SenderWho to continue.`,
+        result.reauthenticated ? "Identity verified" : "Yahoo Mail connected",
+        result.reauthenticated
+          ? `Recent authentication for ${result.emailAddress} is complete. Return to SenderWho to continue.`
+          : `${result.emailAddress} is now connected. Return to SenderWho to continue.`,
       );
     } catch {
       return oauthResultPage(

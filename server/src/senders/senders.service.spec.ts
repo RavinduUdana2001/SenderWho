@@ -53,6 +53,14 @@ describe("SendersService ownership", () => {
       service.setTrusted("owner-user", "foreign-sender", true),
     ).rejects.toThrow("not found");
 
+    expect(prisma.sender.findFirst.mock.calls[0][0]).toEqual(
+      expect.objectContaining({
+        include: expect.objectContaining({
+          messages: expect.objectContaining({ where: { isTrashed: false } }),
+        }),
+      }),
+    );
+
     for (const call of prisma.sender.findFirst.mock.calls) {
       expect(call[0]).toEqual(
         expect.objectContaining({

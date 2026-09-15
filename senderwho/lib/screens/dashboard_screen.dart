@@ -17,6 +17,8 @@ import '../screens/unsubscribe_screen.dart';
 import '../services/senderwho_repository.dart';
 import '../theme/app_colors.dart';
 import '../utils/responsive.dart';
+import '../widgets/app_animated_progress.dart';
+import '../widgets/app_card.dart';
 import '../widgets/app_page.dart';
 
 class DashboardScreen extends StatefulWidget {
@@ -126,8 +128,12 @@ class _DashboardScreenState extends State<DashboardScreen>
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              _DashboardHeader(isRefreshing: isRefreshing, onRefresh: _refresh),
-              SizedBox(height: context.gap(26)),
+              _DashboardHeader(
+                dashboard: dashboard,
+                isRefreshing: isRefreshing,
+                onRefresh: _refresh,
+              ),
+              SizedBox(height: context.gap(18)),
               if (isRefreshing)
                 const Padding(
                   padding: EdgeInsets.only(bottom: 14),
@@ -160,45 +166,79 @@ class _DashboardScreenState extends State<DashboardScreen>
 }
 
 class _DashboardHeader extends StatelessWidget {
-  const _DashboardHeader({required this.isRefreshing, required this.onRefresh});
+  const _DashboardHeader({
+    required this.dashboard,
+    required this.isRefreshing,
+    required this.onRefresh,
+  });
 
+  final DashboardSummary? dashboard;
   final bool isRefreshing;
   final VoidCallback onRefresh;
 
   @override
   Widget build(BuildContext context) {
-    return Stack(
-      alignment: Alignment.topCenter,
-      children: [
-        Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 58),
-          child: Text(
-            'Dashboard',
-            key: const ValueKey('dashboard-header-title'),
-            textAlign: TextAlign.center,
-            style: Theme.of(context).textTheme.headlineSmall?.copyWith(
-              fontSize: 20,
-              fontWeight: FontWeight.w800,
+    final connectedEmail = dashboard?.connectedEmail?.trim();
+    final subtitle = dashboard == null
+        ? 'Your inbox command center'
+        : connectedEmail == null || connectedEmail.isEmpty
+        ? _scanActionDetail(dashboard!)
+        : '$connectedEmail · ${_scanActionDetail(dashboard!)}';
+
+    return ConstrainedBox(
+      constraints: const BoxConstraints(minHeight: 54),
+      child: Stack(
+        alignment: Alignment.topCenter,
+        children: [
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 62),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  'Dashboard',
+                  key: const ValueKey('dashboard-header-title'),
+                  textAlign: TextAlign.center,
+                  style: Theme.of(context).textTheme.headlineSmall?.copyWith(
+                    fontSize: 21,
+                    fontWeight: FontWeight.w800,
+                    letterSpacing: -0.35,
+                  ),
+                ),
+                const SizedBox(height: 3),
+                Text(
+                  subtitle,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  textAlign: TextAlign.center,
+                  style: Theme.of(context).textTheme.labelMedium?.copyWith(
+                    color: AppColors.mutedFor(context),
+                    fontSize: 11.5,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ],
             ),
           ),
-        ),
-        Align(
-          alignment: Alignment.topLeft,
-          child: _RoundIconButton(
-            tooltip: 'Open menu',
-            icon: Icons.menu_rounded,
-            onPressed: () => Scaffold.of(context).openDrawer(),
+          Align(
+            alignment: Alignment.topLeft,
+            child: _RoundIconButton(
+              tooltip: 'Open menu',
+              icon: Icons.menu_rounded,
+              onPressed: () => Scaffold.of(context).openDrawer(),
+            ),
           ),
-        ),
-        Align(
-          alignment: Alignment.topRight,
-          child: _RoundIconButton(
-            tooltip: 'Refresh live results',
-            icon: isRefreshing ? Icons.sync_rounded : Icons.refresh_rounded,
-            onPressed: onRefresh,
+          Align(
+            alignment: Alignment.topRight,
+            child: _RoundIconButton(
+              tooltip: 'Refresh live results',
+              icon: Icons.refresh_rounded,
+              onPressed: onRefresh,
+              spinning: isRefreshing,
+            ),
           ),
-        ),
-      ],
+        ],
+      ),
     );
   }
 }
@@ -235,18 +275,18 @@ class _DashboardContent extends StatelessWidget {
           SizedBox(height: context.gap(16)),
           _SyncNotice(dashboard: dashboard, onRetry: onScan),
         ],
-        SizedBox(height: context.gap(20)),
+        SizedBox(height: context.gap(16)),
         _HealthOverviewCard(summary: dashboard),
-        SizedBox(height: context.gap(28)),
+        SizedBox(height: context.gap(24)),
         const _SectionHeader(
           title: 'Inbox overview',
           caption: 'Live results from stored email metadata',
         ),
         const SizedBox(height: 14),
         _MetricGrid(summary: dashboard),
-        SizedBox(height: context.gap(28)),
+        SizedBox(height: context.gap(24)),
         _CleanupOpportunityCard(summary: dashboard),
-        SizedBox(height: context.gap(28)),
+        SizedBox(height: context.gap(24)),
         const _SectionHeader(
           title: 'Quick actions',
           caption: 'Manage your inbox without leaving SenderWho',
@@ -257,7 +297,7 @@ class _DashboardContent extends StatelessWidget {
           queueingScan: queueingScan,
           onScan: onScan,
         ),
-        SizedBox(height: context.gap(28)),
+        SizedBox(height: context.gap(24)),
         _SectionHeader(
           title: 'Top senders',
           caption: 'Ranked by scanned message volume',
@@ -267,7 +307,7 @@ class _DashboardContent extends StatelessWidget {
         ),
         const SizedBox(height: 14),
         _TopSendersCard(items: dashboard.topSenders),
-        SizedBox(height: context.gap(28)),
+        SizedBox(height: context.gap(24)),
         _SectionHeader(
           title: 'Security alerts',
           caption: dashboard.recentAlerts.isEmpty
@@ -295,13 +335,14 @@ class _PreviewModeNotice extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final accent = AppColors.visualAccentFor(context, AppColors.indigo);
     return Container(
       width: double.infinity,
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
       decoration: BoxDecoration(
         color: AppColors.softFill(context, AppColors.indigo),
         borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: AppColors.indigo.withValues(alpha: 0.2)),
+        border: Border.all(color: accent.withValues(alpha: 0.2)),
       ),
       child: Row(
         children: [
@@ -334,28 +375,25 @@ class _DashboardSearch extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final accent = AppColors.visualAccentFor(context, AppColors.primary);
     return Material(
       color: Colors.transparent,
       child: InkWell(
         onTap: onTap,
-        borderRadius: BorderRadius.circular(16),
+        borderRadius: BorderRadius.circular(15),
         child: Ink(
-          height: 52,
-          padding: const EdgeInsets.symmetric(horizontal: 17),
+          height: 50,
+          padding: const EdgeInsets.symmetric(horizontal: 15),
           decoration: BoxDecoration(
-            color: AppColors.surface(context),
-            borderRadius: BorderRadius.circular(16),
+            color: AppColors.elevatedSurface(context),
+            borderRadius: BorderRadius.circular(15),
             border: Border.all(
-              color: AppColors.borderFor(context).withValues(alpha: 0.58),
+              color: AppColors.borderFor(context).withValues(alpha: 0.82),
             ),
           ),
           child: Row(
             children: [
-              const Icon(
-                Icons.search_rounded,
-                size: 21,
-                color: AppColors.primary,
-              ),
+              Icon(Icons.search_rounded, size: 21, color: accent),
               const SizedBox(width: 12),
               Expanded(
                 child: Text(
@@ -364,13 +402,18 @@ class _DashboardSearch extends StatelessWidget {
                   overflow: TextOverflow.ellipsis,
                   style: Theme.of(
                     context,
-                  ).textTheme.bodyMedium?.copyWith(fontSize: 12),
+                  ).textTheme.bodyMedium?.copyWith(fontSize: 13),
                 ),
               ),
-              Icon(
-                Icons.tune_rounded,
-                size: 18,
-                color: AppColors.mutedFor(context),
+              Container(
+                width: 34,
+                height: 34,
+                alignment: Alignment.center,
+                decoration: BoxDecoration(
+                  color: AppColors.softFill(context, AppColors.primary),
+                  borderRadius: BorderRadius.circular(11),
+                ),
+                child: Icon(Icons.tune_rounded, size: 17, color: accent),
               ),
             ],
           ),
@@ -387,26 +430,15 @@ class _HealthOverviewCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final healthColor = _healthColor(summary);
-    return Container(
-      padding: const EdgeInsets.all(20),
-      decoration: BoxDecoration(
-        color: Color.alphaBlend(
-          healthColor.withValues(
-            alpha: AppColors.isDark(context) ? 0.07 : 0.045,
-          ),
-          AppColors.surface(context),
-        ),
-        borderRadius: BorderRadius.circular(24),
-        border: Border.all(color: healthColor.withValues(alpha: 0.18)),
-        boxShadow: [
-          BoxShadow(
-            color: AppColors.shadowFor(context),
-            blurRadius: 18,
-            offset: const Offset(0, 7),
-          ),
-        ],
-      ),
+    final onGradient = AppColors.onGradientFor(context);
+    final onGradientMuted = AppColors.onGradientMutedFor(context);
+    final success = AppColors.successFor(context);
+    final successVisual = AppColors.successVisualFor(context);
+    final action = AppColors.gradientActionFor(context);
+    return AppGradientCard(
+      padding: const EdgeInsets.all(18),
+      solidInDark: true,
+      onTap: () => Navigator.pushNamed(context, InboxHealthScreen.routeName),
       child: Column(
         children: [
           Row(
@@ -419,28 +451,31 @@ class _HealthOverviewCard extends StatelessWidget {
                     Text(
                       'INBOX HEALTH',
                       style: Theme.of(context).textTheme.labelMedium?.copyWith(
+                        color: onGradientMuted,
                         fontWeight: FontWeight.w800,
                         letterSpacing: 0.8,
                       ),
                     ),
                     const SizedBox(height: 9),
-                    Text(
-                      '${summary.inboxHealthScore}%',
+                    AppAnimatedCount(
+                      value: summary.inboxHealthScore,
+                      formatter: (value) => '$value%',
                       style: Theme.of(context).textTheme.headlineLarge
-                          ?.copyWith(fontSize: 32, letterSpacing: -0.8),
+                          ?.copyWith(color: onGradient, letterSpacing: -0.7),
                     ),
                     const SizedBox(height: 6),
                     Row(
                       children: [
-                        _Dot(color: healthColor),
+                        _Dot(color: successVisual),
                         const SizedBox(width: 7),
                         Flexible(
                           child: Text(
                             summary.inboxHealthStatus,
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,
-                            style: Theme.of(context).textTheme.labelLarge
-                                ?.copyWith(color: healthColor),
+                            style: Theme.of(
+                              context,
+                            ).textTheme.labelLarge?.copyWith(color: success),
                           ),
                         ),
                       ],
@@ -450,7 +485,9 @@ class _HealthOverviewCard extends StatelessWidget {
                       summary.totalMessages == 0
                           ? 'Results appear after the first scan.'
                           : '${_formatCount(summary.totalMessages)} scanned messages',
-                      style: Theme.of(context).textTheme.bodySmall,
+                      style: Theme.of(
+                        context,
+                      ).textTheme.bodySmall?.copyWith(color: onGradientMuted),
                     ),
                   ],
                 ),
@@ -460,41 +497,32 @@ class _HealthOverviewCard extends StatelessWidget {
             ],
           ),
           const SizedBox(height: 15),
-          Material(
-            color: Colors.transparent,
-            child: InkWell(
-              onTap: () =>
-                  Navigator.pushNamed(context, InboxHealthScreen.routeName),
+          Container(
+            height: 42,
+            decoration: BoxDecoration(
+              color: action.withValues(
+                alpha: AppColors.isDark(context) ? 0.12 : 0.075,
+              ),
               borderRadius: BorderRadius.circular(13),
-              child: Ink(
-                height: 42,
-                decoration: BoxDecoration(
-                  color: healthColor.withValues(
-                    alpha: AppColors.isDark(context) ? 0.14 : 0.08,
-                  ),
-                  borderRadius: BorderRadius.circular(13),
-                  border: Border.all(color: healthColor.withValues(alpha: 0.2)),
-                ),
-                child: Row(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    Text(
-                      'View details',
-                      style: TextStyle(
-                        color: healthColor,
-                        fontSize: 12,
-                        fontWeight: FontWeight.w800,
-                      ),
-                    ),
-                    SizedBox(width: 7),
-                    Icon(
-                      Icons.arrow_forward_rounded,
-                      size: 16,
-                      color: healthColor,
-                    ),
-                  ],
+              border: Border.all(
+                color: action.withValues(
+                  alpha: AppColors.isDark(context) ? 0.22 : 0.18,
                 ),
               ),
+            ),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Text(
+                  'View details',
+                  style: Theme.of(context).textTheme.labelLarge?.copyWith(
+                    color: action,
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+                const SizedBox(width: 7),
+                Icon(Icons.arrow_forward_rounded, size: 17, color: action),
+              ],
             ),
           ),
         ],
@@ -536,7 +564,7 @@ class _MetricGrid extends StatelessWidget {
         value: summary.promotions,
         label: 'Promotions',
         detail: 'Marketing messages',
-        color: AppColors.cyan,
+        color: AppColors.success,
         route: EmailsScreen.routeName,
         arguments: const EmailListArguments(
           mailbox: 'ALL',
@@ -592,24 +620,19 @@ class _MetricCard extends StatelessWidget {
       child: InkWell(
         onTap: () =>
             Navigator.pushNamed(context, data.route, arguments: data.arguments),
-        borderRadius: BorderRadius.circular(20),
+        borderRadius: BorderRadius.circular(16),
         child: Ink(
-          padding: const EdgeInsets.all(16),
+          padding: const EdgeInsets.all(14),
           decoration: BoxDecoration(
-            color: AppColors.surface(context),
-            borderRadius: BorderRadius.circular(20),
-            border: Border.all(
-              color: AppColors.borderFor(
-                context,
-              ).withValues(alpha: AppColors.isDark(context) ? 0.64 : 0.8),
+            gradient: LinearGradient(
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+              colors: AppColors.tonalGradientFor(context, data.color),
             ),
-            boxShadow: [
-              BoxShadow(
-                color: AppColors.shadowFor(context),
-                blurRadius: 16,
-                offset: const Offset(0, 6),
-              ),
-            ],
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(
+              color: AppColors.tonalBorderFor(context, data.color),
+            ),
           ),
           child: Column(
             mainAxisSize: MainAxisSize.min,
@@ -617,7 +640,7 @@ class _MetricCard extends StatelessWidget {
             children: [
               Row(
                 children: [
-                  _SoftIcon(icon: data.icon, color: data.color),
+                  _SoftIcon(icon: data.icon, color: data.color, size: 34),
                   const Spacer(),
                   Icon(
                     Icons.arrow_outward_rounded,
@@ -626,11 +649,10 @@ class _MetricCard extends StatelessWidget {
                   ),
                 ],
               ),
-              const SizedBox(height: 14),
-              Text(
-                _formatCount(data.value),
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
+              const SizedBox(height: 10),
+              AppAnimatedCount(
+                value: data.value,
+                formatter: _formatCount,
                 style: Theme.of(context).textTheme.titleLarge?.copyWith(
                   fontSize: 21,
                   fontWeight: FontWeight.w800,
@@ -643,7 +665,7 @@ class _MetricCard extends StatelessWidget {
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
                 style: Theme.of(context).textTheme.bodyLarge?.copyWith(
-                  fontSize: 12,
+                  fontSize: 13,
                   fontWeight: FontWeight.w700,
                 ),
               ),
@@ -653,7 +675,7 @@ class _MetricCard extends StatelessWidget {
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
                 style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                  fontSize: 10,
+                  fontSize: 11.5,
                   fontWeight: FontWeight.w500,
                 ),
               ),
@@ -673,19 +695,29 @@ class _CleanupOpportunityCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final hasOpportunity = summary.cleanupMessages > 0;
+    final isDark = AppColors.isDark(context);
     return Container(
-      padding: const EdgeInsets.all(20),
+      padding: const EdgeInsets.all(18),
       decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(22),
-        color: AppColors.surface(context),
-        border: Border.all(color: AppColors.borderFor(context)),
-        boxShadow: [
-          BoxShadow(
-            color: AppColors.shadowFor(context),
-            blurRadius: 18,
-            offset: const Offset(0, 7),
-          ),
-        ],
+        borderRadius: BorderRadius.circular(18),
+        color: isDark ? AppColors.darkElevatedCard : null,
+        gradient: isDark
+            ? null
+            : LinearGradient(
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
+                colors: AppColors.tonalGradientFor(
+                  context,
+                  AppColors.indigo,
+                  elevated: true,
+                  intensity: 1.15,
+                ),
+              ),
+        border: Border.all(
+          color: isDark
+              ? AppColors.darkBorder.withValues(alpha: 0.9)
+              : AppColors.tonalBorderFor(context, AppColors.indigo),
+        ),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -696,7 +728,7 @@ class _CleanupOpportunityCard extends StatelessWidget {
               const _SoftIcon(
                 icon: Icons.auto_awesome_rounded,
                 color: AppColors.primary,
-                size: 44,
+                size: 40,
               ),
               const SizedBox(width: 14),
               Expanded(
@@ -725,7 +757,7 @@ class _CleanupOpportunityCard extends StatelessWidget {
             ],
           ),
           if (hasOpportunity) ...[
-            const SizedBox(height: 17),
+            const SizedBox(height: 14),
             Row(
               children: [
                 _OpportunityStat(
@@ -740,7 +772,7 @@ class _CleanupOpportunityCard extends StatelessWidget {
               ],
             ),
           ],
-          const SizedBox(height: 17),
+          const SizedBox(height: 14),
           SizedBox(
             width: double.infinity,
             height: 42,
@@ -805,7 +837,7 @@ class _QuickActionGrid extends StatelessWidget {
         icon: queueingScan ? Icons.sync_rounded : Icons.cloud_sync_outlined,
         title: queueingScan ? 'Queueing…' : 'Scan inbox',
         detail: _scanActionDetail(summary),
-        color: AppColors.orange,
+        color: AppColors.info,
         onTap:
             summary.connectedAccountId == null ||
                 queueingScan ||
@@ -843,41 +875,53 @@ class _QuickActionCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final isDark = AppColors.isDark(context);
     return Material(
       color: Colors.transparent,
       child: InkWell(
         onTap: action.onTap,
-        borderRadius: BorderRadius.circular(17),
+        borderRadius: BorderRadius.circular(15),
         child: Ink(
-          padding: const EdgeInsets.all(15),
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 13),
           decoration: BoxDecoration(
-            color: AppColors.elevatedSurface(context),
-            borderRadius: BorderRadius.circular(17),
+            color: isDark ? AppColors.darkElevatedCard : null,
+            gradient: isDark
+                ? null
+                : LinearGradient(
+                    begin: Alignment.topLeft,
+                    end: Alignment.bottomRight,
+                    colors: AppColors.tonalGradientFor(
+                      context,
+                      action.color,
+                      elevated: true,
+                      intensity: 0.9,
+                    ),
+                  ),
+            borderRadius: BorderRadius.circular(15),
             border: Border.all(
-              color: AppColors.borderFor(context).withValues(alpha: 0.56),
+              color: isDark
+                  ? AppColors.darkBorder.withValues(alpha: 0.9)
+                  : AppColors.tonalBorderFor(
+                      context,
+                      action.color,
+                      intensity: 0.9,
+                    ),
             ),
-            boxShadow: [
-              BoxShadow(
-                color: AppColors.shadowFor(context),
-                blurRadius: 16,
-                offset: const Offset(0, 7),
-              ),
-            ],
           ),
           child: Row(
             children: [
-              _SoftIcon(icon: action.icon, color: action.color),
-              const SizedBox(width: 11),
+              _SoftIcon(icon: action.icon, color: action.color, size: 34),
+              const SizedBox(width: 10),
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
                       action.title,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
+                      maxLines: 2,
+                      overflow: TextOverflow.fade,
                       style: Theme.of(context).textTheme.bodyLarge?.copyWith(
-                        fontSize: 11,
+                        fontSize: 12.5,
                         fontWeight: FontWeight.w800,
                       ),
                     ),
@@ -887,17 +931,12 @@ class _QuickActionCard extends StatelessWidget {
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                       style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                        fontSize: 9,
+                        fontSize: 11.5,
                         fontWeight: FontWeight.w500,
                       ),
                     ),
                   ],
                 ),
-              ),
-              Icon(
-                Icons.chevron_right_rounded,
-                size: 17,
-                color: AppColors.mutedFor(context),
               ),
             ],
           ),
@@ -927,7 +966,14 @@ class _TopSendersCard extends StatelessWidget {
       child: Column(
         children: [
           for (var index = 0; index < items.length; index++) ...[
-            _TopSenderRow(item: items[index]),
+            _TopSenderRow(
+              item: items[index],
+              color: const [
+                AppColors.info,
+                AppColors.indigo,
+                AppColors.success,
+              ][index % 3],
+            ),
             if (index != items.length - 1)
               Divider(
                 height: 1,
@@ -942,9 +988,10 @@ class _TopSendersCard extends StatelessWidget {
 }
 
 class _TopSenderRow extends StatelessWidget {
-  const _TopSenderRow({required this.item});
+  const _TopSenderRow({required this.item, required this.color});
 
   final TopSenderItem item;
+  final Color color;
 
   @override
   Widget build(BuildContext context) {
@@ -969,13 +1016,13 @@ class _TopSenderRow extends StatelessWidget {
               height: 36,
               alignment: Alignment.center,
               decoration: BoxDecoration(
-                color: AppColors.softFill(context, AppColors.primary),
+                color: AppColors.softFill(context, color),
                 borderRadius: BorderRadius.circular(12),
               ),
               child: Text(
                 initial,
-                style: const TextStyle(
-                  color: AppColors.primary,
+                style: TextStyle(
+                  color: AppColors.visualAccentFor(context, color),
                   fontSize: 13,
                   fontWeight: FontWeight.w800,
                 ),
@@ -1050,7 +1097,11 @@ class _AlertCard extends StatelessWidget {
         borderRadius: BorderRadius.circular(18),
         child: Ink(
           padding: const EdgeInsets.all(16),
-          decoration: _surfaceDecoration(context, radius: 18),
+          decoration: _surfaceDecoration(
+            context,
+            radius: 18,
+            tint: alert.color,
+          ),
           child: Row(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
@@ -1128,11 +1179,12 @@ class _SyncNotice extends StatelessWidget {
         dashboard.syncStatus == 'FAILED' ||
         dashboard.syncStatus == 'DISCONNECTED';
     final backfilling = dashboard.syncStatus == 'PARTIAL';
-    final color = failed
+    final baseColor = failed
         ? AppColors.danger
         : backfilling
         ? AppColors.success
         : AppColors.primary;
+    final color = AppColors.foregroundFor(context, baseColor);
     final actionLabel = switch (recovery) {
       'RECONNECT' => 'Reconnect',
       'CONFIGURE_GOOGLE' => 'Details',
@@ -1220,7 +1272,11 @@ class _SafeInboxCard extends StatelessWidget {
   Widget build(BuildContext context) {
     return Container(
       padding: const EdgeInsets.all(18),
-      decoration: _surfaceDecoration(context, radius: 18),
+      decoration: _surfaceDecoration(
+        context,
+        radius: 18,
+        tint: AppColors.success,
+      ),
       child: Row(
         children: [
           const _SoftIcon(
@@ -1326,7 +1382,11 @@ class _DashboardUnavailable extends StatelessWidget {
         Container(
           width: double.infinity,
           padding: const EdgeInsets.all(24),
-          decoration: _surfaceDecoration(context, radius: 22),
+          decoration: _surfaceDecoration(
+            context,
+            radius: 22,
+            tint: AppColors.danger,
+          ),
           child: Column(
             children: [
               const _SoftIcon(
@@ -1391,21 +1451,18 @@ class _DashboardStaleNotice extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final accent = AppColors.visualAccentFor(context, AppColors.warning);
     return Container(
       width: double.infinity,
       padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
       decoration: BoxDecoration(
         color: AppColors.softFill(context, AppColors.warning),
         borderRadius: BorderRadius.circular(15),
-        border: Border.all(color: AppColors.warning.withValues(alpha: 0.25)),
+        border: Border.all(color: accent.withValues(alpha: 0.25)),
       ),
       child: Row(
         children: [
-          const Icon(
-            Icons.cloud_off_outlined,
-            size: 19,
-            color: AppColors.warning,
-          ),
+          Icon(Icons.cloud_off_outlined, size: 19, color: accent),
           const SizedBox(width: 10),
           const Expanded(
             child: Text('Showing saved results. Live refresh is unavailable.'),
@@ -1490,7 +1547,7 @@ class _SectionHeader extends StatelessWidget {
               Text(
                 title,
                 style: Theme.of(context).textTheme.titleLarge?.copyWith(
-                  fontSize: 16,
+                  fontSize: 18,
                   fontWeight: FontWeight.w800,
                   letterSpacing: -0.25,
                 ),
@@ -1501,7 +1558,7 @@ class _SectionHeader extends StatelessWidget {
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
                 style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                  fontSize: 10,
+                  fontSize: 12,
                   fontWeight: FontWeight.w500,
                 ),
               ),
@@ -1518,7 +1575,7 @@ class _SectionHeader extends StatelessWidget {
             ),
             child: Text(
               actionLabel!,
-              style: const TextStyle(fontSize: 10, fontWeight: FontWeight.w800),
+              style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w800),
             ),
           ),
       ],
@@ -1533,44 +1590,44 @@ class _HealthRing extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return SizedBox(
-      width: 76,
-      height: 76,
-      child: Stack(
-        alignment: Alignment.center,
+    final onGradient = AppColors.onGradientFor(context);
+    final onGradientMuted = AppColors.onGradientMutedFor(context);
+    final ringColor = AppColors.visualAccentFor(context, AppColors.primary);
+    final ringEnd = AppColors.visualAccentFor(
+      context,
+      AppColors.isDark(context) ? AppColors.info : AppColors.indigo,
+    );
+    return AppAnimatedProgressRing(
+      value: percent / 100,
+      size: 78,
+      strokeWidth: 7,
+      backgroundColor: ringColor.withValues(alpha: 0.16),
+      color: ringColor,
+      gradient: LinearGradient(
+        begin: Alignment.topLeft,
+        end: Alignment.bottomRight,
+        colors: [ringColor, ringEnd],
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
         children: [
-          SizedBox.expand(
-            child: CircularProgressIndicator(
-              value: percent.clamp(0, 100).toDouble() / 100,
-              strokeWidth: 7,
-              backgroundColor: AppColors.trackFor(context),
-              color: _healthColorFromScore(percent),
-              strokeCap: StrokeCap.round,
+          Text(
+            '$percent',
+            style: Theme.of(context).textTheme.titleLarge?.copyWith(
+              color: onGradient,
+              fontWeight: FontWeight.w800,
+              height: 1,
             ),
           ),
-          Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Text(
-                '$percent',
-                style: TextStyle(
-                  color: Theme.of(context).colorScheme.onSurface,
-                  fontSize: 17,
-                  fontWeight: FontWeight.w800,
-                  height: 1,
-                ),
-              ),
-              const SizedBox(height: 3),
-              Text(
-                'SCORE',
-                style: TextStyle(
-                  color: AppColors.mutedFor(context),
-                  fontSize: 7,
-                  fontWeight: FontWeight.w700,
-                  letterSpacing: 0.7,
-                ),
-              ),
-            ],
+          const SizedBox(height: 3),
+          Text(
+            'SCORE',
+            style: Theme.of(context).textTheme.labelSmall?.copyWith(
+              color: onGradientMuted,
+              fontSize: 9,
+              fontWeight: FontWeight.w700,
+              letterSpacing: 0.7,
+            ),
           ),
         ],
       ),
@@ -1583,11 +1640,13 @@ class _RoundIconButton extends StatelessWidget {
     required this.tooltip,
     required this.icon,
     required this.onPressed,
+    this.spinning = false,
   });
 
   final String tooltip;
   final IconData icon;
   final VoidCallback onPressed;
+  final bool spinning;
 
   @override
   Widget build(BuildContext context) {
@@ -1595,28 +1654,37 @@ class _RoundIconButton extends StatelessWidget {
       message: tooltip,
       child: Material(
         color: AppColors.elevatedSurface(context),
-        borderRadius: BorderRadius.circular(14),
+        borderRadius: BorderRadius.circular(15),
         child: InkWell(
           onTap: onPressed,
-          borderRadius: BorderRadius.circular(14),
+          borderRadius: BorderRadius.circular(15),
           child: Container(
-            width: 42,
-            height: 42,
+            width: 46,
+            height: 46,
             alignment: Alignment.center,
             decoration: BoxDecoration(
-              borderRadius: BorderRadius.circular(14),
+              borderRadius: BorderRadius.circular(15),
               border: Border.all(
                 color: AppColors.borderFor(context).withValues(alpha: 0.55),
               ),
               boxShadow: [
                 BoxShadow(
                   color: AppColors.shadowFor(context),
-                  blurRadius: 14,
-                  offset: const Offset(0, 6),
+                  blurRadius: 12,
+                  offset: const Offset(0, 4),
                 ),
               ],
             ),
-            child: Icon(icon, size: 20),
+            child: TweenAnimationBuilder<double>(
+              tween: Tween(end: spinning ? 1 : 0),
+              duration: MediaQuery.disableAnimationsOf(context)
+                  ? Duration.zero
+                  : const Duration(milliseconds: 700),
+              curve: Curves.easeInOutCubic,
+              builder: (context, value, child) =>
+                  Transform.rotate(angle: value * 6.283, child: child),
+              child: Icon(icon, size: 20),
+            ),
           ),
         ),
       ),
@@ -1633,6 +1701,7 @@ class _SoftIcon extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final resolvedColor = AppColors.visualAccentFor(context, color);
     return Container(
       width: size,
       height: size,
@@ -1640,9 +1709,9 @@ class _SoftIcon extends StatelessWidget {
       decoration: BoxDecoration(
         color: AppColors.softFill(context, color),
         borderRadius: BorderRadius.circular(size * 0.32),
-        border: Border.all(color: color.withValues(alpha: 0.12)),
+        border: Border.all(color: resolvedColor.withValues(alpha: 0.16)),
       ),
-      child: Icon(icon, color: color, size: size * 0.5),
+      child: Icon(icon, color: resolvedColor, size: size * 0.5),
     );
   }
 }
@@ -1702,6 +1771,7 @@ class _RiskPill extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final resolvedColor = AppColors.foregroundFor(context, color);
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
       decoration: BoxDecoration(
@@ -1711,7 +1781,7 @@ class _RiskPill extends StatelessWidget {
       child: Text(
         label,
         style: TextStyle(
-          color: color,
+          color: resolvedColor,
           fontSize: 8,
           fontWeight: FontWeight.w800,
         ),
@@ -1727,10 +1797,11 @@ class _Dot extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final resolvedColor = AppColors.foregroundFor(context, color);
     return Container(
       width: 7,
       height: 7,
-      decoration: BoxDecoration(color: color, shape: BoxShape.circle),
+      decoration: BoxDecoration(color: resolvedColor, shape: BoxShape.circle),
     );
   }
 }
@@ -1791,12 +1862,31 @@ class _ActionData {
   final VoidCallback? onTap;
 }
 
-BoxDecoration _surfaceDecoration(BuildContext context, {double radius = 18}) {
+BoxDecoration _surfaceDecoration(
+  BuildContext context, {
+  double radius = 18,
+  Color tint = AppColors.primary,
+}) {
+  final isDark = AppColors.isDark(context);
   return BoxDecoration(
-    color: AppColors.surface(context),
+    color: isDark ? AppColors.darkElevatedCard : null,
+    gradient: isDark
+        ? null
+        : LinearGradient(
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+            colors: AppColors.tonalGradientFor(
+              context,
+              tint,
+              elevated: true,
+              intensity: 0.72,
+            ),
+          ),
     borderRadius: BorderRadius.circular(radius),
     border: Border.all(
-      color: AppColors.borderFor(context).withValues(alpha: 0.56),
+      color: isDark
+          ? AppColors.darkBorder.withValues(alpha: 0.9)
+          : AppColors.tonalBorderFor(context, tint, intensity: 0.78),
     ),
     boxShadow: [
       BoxShadow(
@@ -1806,17 +1896,6 @@ BoxDecoration _surfaceDecoration(BuildContext context, {double radius = 18}) {
       ),
     ],
   );
-}
-
-Color _healthColor(DashboardSummary summary) {
-  if (summary.totalMessages == 0) return AppColors.muted;
-  return _healthColorFromScore(summary.inboxHealthScore);
-}
-
-Color _healthColorFromScore(int score) {
-  if (score >= 80) return AppColors.primary;
-  if (score >= 60) return AppColors.warning;
-  return AppColors.danger;
 }
 
 String _relativeFromValue(String value) {

@@ -20,6 +20,13 @@ export class EmailAccountsController {
     return this.emailAccountsService.queueSync(userId, id);
   }
 
+  @Post(":id/activate")
+  @Idempotent("email-account.activate")
+  @Throttle({ default: { limit: 10, ttl: 60_000, blockDuration: 60_000 } })
+  activate(@CurrentUser("id") userId: string, @Param("id") id: string) {
+    return this.emailAccountsService.activate(userId, id);
+  }
+
   @Delete(":id")
   @Idempotent("email-account.disconnect")
   @Throttle({ default: { limit: 5, ttl: 60_000, blockDuration: 60_000 } })

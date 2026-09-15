@@ -8,6 +8,10 @@ import type { NextFunction, Request, Response } from "express";
 import { json, urlencoded } from "express";
 import helmet from "helmet";
 import { applyMysqlMigrations } from "./common/database/mysql-migrations";
+import {
+  resolveDatabaseTcpEndpoint,
+  shouldApplyMigrationsAtRuntime,
+} from "./common/database/database-endpoint";
 
 let startupPhase = "bootstrap";
 
@@ -33,7 +37,7 @@ async function bootstrap() {
     bufferLogs: true,
     bodyParser: false,
   });
-  if (process.env.NODE_ENV === "production") {
+  if (shouldApplyMigrationsAtRuntime()) {
     startupPhase = "database-migrations";
     console.log(JSON.stringify({ event: "database.migrations.starting" }));
     await applyMysqlMigrations();
@@ -204,10 +208,7 @@ function configureHostingerDatabaseUrl(): void {
 
 async function checkDatabaseTcpConnection(): Promise<void> {
   if (process.env.MOCK_DATA_ENABLED === "true") return;
-  const configuredHost = process.env.DB_HOST?.trim() || "localhost";
-  const host = configuredHost === "localhost" ? "127.0.0.1" : configuredHost;
-  const parsedPort = Number(process.env.DB_PORT?.trim() || "3306");
-  const port = Number.isInteger(parsedPort) ? parsedPort : 3306;
+  const { host, port } = resolveDatabaseTcpEndpoint();
   const startedAt = Date.now();
 
   await new Promise<void>((resolve, reject) => {

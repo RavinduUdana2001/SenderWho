@@ -4,6 +4,7 @@ describe("ScanInboxProcessor provider routing", () => {
   it.each([
     ["GOOGLE", "gmail"],
     ["YAHOO", "yahoo"],
+    ["MICROSOFT", "microsoft"],
   ] as const)(
     "routes %s accounts to the %s sync adapter",
     async (provider, expected) => {
@@ -18,10 +19,14 @@ describe("ScanInboxProcessor provider routing", () => {
       const yahoo = {
         syncAccount: jest.fn().mockResolvedValue({ processed: 1 }),
       };
+      const microsoft = {
+        syncAccount: jest.fn().mockResolvedValue({ processed: 1 }),
+      };
       const processor = new ScanInboxProcessor(
         prisma as never,
         gmail as never,
         yahoo as never,
+        microsoft as never,
       );
       const updateProgress = jest.fn();
 
@@ -39,15 +44,16 @@ describe("ScanInboxProcessor provider routing", () => {
       expect(yahoo.syncAccount).toHaveBeenCalledTimes(
         expected === "yahoo" ? 1 : 0,
       );
+      expect(microsoft.syncAccount).toHaveBeenCalledTimes(
+        expected === "microsoft" ? 1 : 0,
+      );
     },
   );
 
-  it("does not route unsupported providers through Gmail or Yahoo", async () => {
+  it("does not route unsupported providers through a mailbox adapter", async () => {
     const prisma = {
       emailAccount: {
-        findUniqueOrThrow: jest
-          .fn()
-          .mockResolvedValue({ provider: "MICROSOFT" }),
+        findUniqueOrThrow: jest.fn().mockResolvedValue({ provider: "IMAP" }),
       },
     };
     const gmail = { syncAccount: jest.fn() };
@@ -66,7 +72,7 @@ describe("ScanInboxProcessor provider routing", () => {
         opts: { attempts: 1 },
         updateProgress: jest.fn(),
       }),
-    ).rejects.toThrow("MICROSOFT");
+    ).rejects.toThrow("IMAP");
     expect(gmail.syncAccount).not.toHaveBeenCalled();
     expect(yahoo.syncAccount).not.toHaveBeenCalled();
   });

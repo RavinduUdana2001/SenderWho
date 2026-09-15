@@ -30,6 +30,7 @@ class _BulkCleanScreenState extends State<BulkCleanScreen> {
   final Set<String> _selectedSuggestionIds = {};
   bool _queueing = false;
   bool _preparingPreview = false;
+  bool _canceling = false;
   String? _pollError;
   Timer? _pollTimer;
 
@@ -64,11 +65,11 @@ class _BulkCleanScreenState extends State<BulkCleanScreen> {
   }
 
   Future<void> _pollJobs() async {
-    if (_activeJobs.isEmpty) return;
+    if (_activeJobs.isEmpty || _canceling) return;
     final jobs = await Future.wait(
       _activeJobs.map((job) => _repository.getCleanupJob(job.id)),
     );
-    if (!mounted) return;
+    if (!mounted || _canceling) return;
     final previous = _activeJobs;
     final available = <CleanupJobInfo>[
       for (var index = 0; index < previous.length; index++)
@@ -96,10 +97,17 @@ class _BulkCleanScreenState extends State<BulkCleanScreen> {
         0,
         (sum, job) => sum + job.failedMessages,
       );
+      final canceled = available.any((job) => job.isCanceled);
+      final unchanged = available.fold<int>(
+        0,
+        (sum, job) => sum + job.remainingMessages,
+      );
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text(
-            failed == 0
+            canceled
+                ? 'Cleanup stopped after $processed messages. $unchanged messages were left unchanged${failed > 0 ? ' and $failed could not be processed' : ''}.'
+                : failed == 0
                 ? '$processed messages cleaned from your inbox.'
                 : '$processed cleaned and $failed failed. You can retry the remaining suggestions.',
           ),
@@ -273,7 +281,11 @@ class _BulkCleanScreenState extends State<BulkCleanScreen> {
               ],
               SizedBox(height: context.gap(24)),
               if (_activeJobs.isNotEmpty) ...[
-                _CleanupProgressCard(jobs: _activeJobs),
+                _CleanupProgressCard(
+                  jobs: _activeJobs,
+                  stopping: _canceling,
+                  onStop: cleanupRunning ? _confirmStopCleanup : null,
+                ),
                 if (_pollError case final error?) ...[
                   const SizedBox(height: 12),
                   AppAsyncError(
@@ -314,6 +326,7 @@ class _BulkCleanScreenState extends State<BulkCleanScreen> {
                     ? 'Select at least one group'
                     : 'Review & clean ${selectedSuggestions.length} group${selectedSuggestions.length == 1 ? '' : 's'}',
                 backgroundColor: AppColors.danger,
+                loading: _preparingPreview || _queueing,
                 onPressed:
                     _preparingPreview ||
                         _queueing ||
@@ -460,6 +473,57 @@ class _BulkCleanScreenState extends State<BulkCleanScreen> {
       ),
     );
   }
+
+  Future<void> _confirmStopCleanup() async {
+    final activeJobs = _activeJobs.where((job) => !job.isFinished).toList();
+    if (_canceling || activeJobs.isEmpty) return;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Stop cleanup?'),
+        content: const Text(
+          'Messages already moved will stay in Trash. A small number of actions already in progress may finish, but all remaining messages will stay in your inbox.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, false),
+            child: const Text('Keep cleaning'),
+          ),
+          FilledButton.icon(
+            onPressed: () => Navigator.pop(dialogContext, true),
+            style: FilledButton.styleFrom(backgroundColor: AppColors.danger),
+            icon: const Icon(Icons.stop_circle_outlined),
+            label: const Text('Stop cleanup'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+
+    _pollTimer?.cancel();
+    setState(() {
+      _canceling = true;
+      _pollError = null;
+    });
+    final results = await Future.wait(
+      activeJobs.map((job) => _repository.cancelCleanupJob(job.id)),
+    );
+    if (!mounted) return;
+    final updates = <String, CleanupJobInfo>{
+      for (final result in results.whereType<CleanupJobInfo>())
+        result.id: result,
+    };
+    final failedRequests = results.where((result) => result == null).length;
+    setState(() {
+      _canceling = false;
+      _activeJobs = [for (final job in _activeJobs) updates[job.id] ?? job];
+      _pollError = failedRequests == 0
+          ? null
+          : _repository.lastError ??
+                'Some cleanup jobs could not be stopped. Please try again.';
+    });
+    await _pollJobs();
+  }
 }
 
 class _CleanupConfirmationContent extends StatelessWidget {
@@ -511,9 +575,15 @@ class _CleanupConfirmationContent extends StatelessWidget {
 }
 
 class _CleanupProgressCard extends StatelessWidget {
-  const _CleanupProgressCard({required this.jobs});
+  const _CleanupProgressCard({
+    required this.jobs,
+    required this.stopping,
+    this.onStop,
+  });
 
   final List<CleanupJobInfo> jobs;
+  final bool stopping;
+  final VoidCallback? onStop;
 
   @override
   Widget build(BuildContext context) {
@@ -524,7 +594,8 @@ class _CleanupProgressCard extends StatelessWidget {
     final remaining = total > attempted ? total - attempted : 0;
     final progress = total == 0 ? 0.0 : (attempted / total).clamp(0.0, 1.0);
     final finished = jobs.every((job) => job.isFinished);
-    final hasFailures = finished && (failed > 0 || remaining > 0);
+    final canceled = jobs.any((job) => job.isCanceled);
+    final hasFailures = !canceled && finished && (failed > 0 || remaining > 0);
     return AppCard(
       padding: const EdgeInsets.all(18),
       child: Column(
@@ -535,16 +606,24 @@ class _CleanupProgressCard extends StatelessWidget {
               Icon(
                 !finished
                     ? Icons.sync_rounded
+                    : canceled
+                    ? Icons.stop_circle_outlined
                     : hasFailures
                     ? Icons.error_outline_rounded
                     : Icons.check_circle_outline,
-                color: hasFailures ? AppColors.danger : AppColors.primary,
+                color: canceled
+                    ? AppColors.warning
+                    : hasFailures
+                    ? AppColors.danger
+                    : AppColors.primary,
               ),
               const SizedBox(width: 10),
               Expanded(
                 child: Text(
                   !finished
                       ? 'Cleaning messages'
+                      : canceled
+                      ? 'Cleanup stopped'
                       : hasFailures
                       ? 'Cleanup completed with issues'
                       : 'Cleanup finished',
@@ -574,8 +653,12 @@ class _CleanupProgressCard extends StatelessWidget {
                 ),
               if (remaining > 0)
                 _CleanupFact(
-                  icon: Icons.replay_rounded,
-                  label: '$remaining remaining',
+                  icon: canceled
+                      ? Icons.mark_email_read_outlined
+                      : Icons.replay_rounded,
+                  label: canceled
+                      ? '$remaining left unchanged'
+                      : '$remaining remaining',
                   color: AppColors.warning,
                 ),
             ],
@@ -584,11 +667,36 @@ class _CleanupProgressCard extends StatelessWidget {
           Text(
             !finished
                 ? 'Cleanup continues safely in the background.'
+                : canceled
+                ? 'Already cleaned messages remain in Trash. Unprocessed messages were left in your inbox.'
                 : hasFailures
                 ? 'Refresh the suggestions, review the remaining messages, and retry safely.'
                 : 'Messages were removed from your inbox and remain recoverable for a limited period.',
             style: Theme.of(context).textTheme.bodyMedium,
           ),
+          if (!finished && onStop != null) ...[
+            const SizedBox(height: 16),
+            SizedBox(
+              width: double.infinity,
+              child: OutlinedButton.icon(
+                key: const ValueKey('cleanup-stop'),
+                onPressed: stopping ? null : onStop,
+                style: OutlinedButton.styleFrom(
+                  foregroundColor: AppColors.danger,
+                  side: BorderSide(
+                    color: AppColors.danger.withValues(alpha: 0.5),
+                  ),
+                ),
+                icon: stopping
+                    ? const SizedBox.square(
+                        dimension: 18,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                    : const Icon(Icons.stop_circle_outlined),
+                label: Text(stopping ? 'Stopping cleanup…' : 'Stop cleanup'),
+              ),
+            ),
+          ],
         ],
       ),
     );
@@ -610,6 +718,7 @@ class _CleanStat extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final resolvedColor = AppColors.foregroundFor(context, color);
     return SizedBox(
       height: 150,
       child: AppCard(
@@ -623,7 +732,7 @@ class _CleanStat extends StatelessWidget {
                 color: AppColors.softFill(context, color),
                 borderRadius: BorderRadius.circular(12),
               ),
-              child: Icon(icon, color: color, size: 19),
+              child: Icon(icon, color: resolvedColor, size: 19),
             ),
             const SizedBox(height: 11),
             Text(
@@ -774,6 +883,7 @@ class _CleanupFact extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final resolvedColor = AppColors.foregroundFor(context, color);
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 6),
       decoration: BoxDecoration(
@@ -783,12 +893,12 @@ class _CleanupFact extends StatelessWidget {
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Icon(icon, size: 14, color: color),
+          Icon(icon, size: 14, color: resolvedColor),
           const SizedBox(width: 5),
           Text(
             label,
             style: Theme.of(context).textTheme.labelSmall?.copyWith(
-              color: color,
+              color: resolvedColor,
               fontWeight: FontWeight.w700,
             ),
           ),

@@ -8,6 +8,104 @@ import 'package:sender_who/models/app_models.dart';
 import 'package:sender_who/services/senderwho_repository.dart';
 
 void main() {
+  test(
+    'settings preferences normalize legacy values and persist updates',
+    () async {
+      final patchBodies = <Map<String, dynamic>>[];
+      final repository = SenderWhoRepository(
+        previewMode: false,
+        client: MockClient((request) async {
+          if (request.method == 'GET' &&
+              request.url.path.endsWith('/settings')) {
+            return http.Response(
+              jsonEncode({
+                'account': {'connectedAccountsCount': 1},
+                'preferences': {
+                  'notificationsEnabled': true,
+                  'inboxScanFrequency': 'DAILY',
+                  'theme': 'DARK',
+                },
+                'emailManagement': {
+                  'archivedEmails': 2,
+                  'trashEmails': 1,
+                  'blockedSenders': 3,
+                },
+              }),
+              200,
+            );
+          }
+          if (request.method == 'PATCH' &&
+              request.url.path.endsWith('/settings/preferences')) {
+            patchBodies.add(
+              (jsonDecode(request.body) as Map).cast<String, dynamic>(),
+            );
+            return http.Response(
+              jsonEncode({
+                'account': {'connectedAccountsCount': 1},
+                'preferences': {
+                  'notificationsEnabled': false,
+                  'inboxScanFrequency': 'Hourly',
+                  'theme': 'Light',
+                },
+                'emailManagement': {
+                  'archivedEmails': 2,
+                  'trashEmails': 1,
+                  'blockedSenders': 3,
+                },
+              }),
+              200,
+            );
+          }
+          return http.Response('Not found', 404);
+        }),
+        sessionStore: MemorySessionStore(),
+        baseUrl: 'https://api.example.test/api/v1',
+      );
+
+      final initial = await repository.getSettings();
+      expect(initial.inboxScanFrequency, 'Daily');
+      expect(initial.theme, 'Dark');
+
+      final updated = await repository.updatePreferences(
+        notificationsEnabled: false,
+        inboxScanFrequency: 'Hourly',
+        theme: 'Light',
+      );
+
+      expect(patchBodies, [
+        {
+          'notificationsEnabled': false,
+          'inboxScanFrequency': 'Hourly',
+          'theme': 'Light',
+        },
+      ]);
+      expect(updated?.notificationsEnabled, isFalse);
+      expect(updated?.inboxScanFrequency, 'Hourly');
+      expect(updated?.theme, 'Light');
+    },
+  );
+
+  test(
+    'preview settings changes remain available during the session',
+    () async {
+      final repository = SenderWhoRepository(
+        previewMode: true,
+        sessionStore: MemorySessionStore(),
+      );
+
+      await repository.updatePreferences(
+        notificationsEnabled: false,
+        inboxScanFrequency: 'Manual',
+        theme: 'Dark',
+      );
+      final settings = await repository.getSettings();
+
+      expect(settings.notificationsEnabled, isFalse);
+      expect(settings.inboxScanFrequency, 'Manual');
+      expect(settings.theme, 'Dark');
+    },
+  );
+
   test('logout storage keeps only the remembered account identity', () async {
     final store = MemorySessionStore()
       ..refreshToken = 'refresh-token'
@@ -69,9 +167,73 @@ void main() {
 
     expect(await repository.availableAuthProviders(), {
       'google': true,
+      'microsoft': false,
       'yahoo': false,
     });
     expect(repository.lastError, isNull);
+  });
+
+  test('connects another mailbox without replacing the app session', () async {
+    final paths = <String>[];
+    final store = MemorySessionStore()..refreshToken = 'current-refresh-token';
+    final repository = SenderWhoRepository(
+      previewMode: false,
+      client: MockClient((request) async {
+        paths.add(request.url.path);
+        if (request.url.path.endsWith('/auth/connect/google/start')) {
+          return http.Response(
+            jsonEncode({
+              'authorizationUrl': 'https://accounts.google.com/o/oauth2/auth',
+              'loginSessionId': 'connect-session',
+              'loginSessionSecret': 'connect-secret',
+            }),
+            200,
+          );
+        }
+        if (request.url.path.endsWith('/auth/oauth/session/exchange')) {
+          return http.Response(
+            jsonEncode({
+              'status': 'ACCOUNT_CONNECTED',
+              'user': {'id': 'user-1', 'email': 'owner@example.com'},
+            }),
+            200,
+          );
+        }
+        return http.Response('Not found', 404);
+      }),
+      sessionStore: store,
+      launchExternal: (_) async => true,
+      oauthPollInterval: Duration.zero,
+      baseUrl: 'https://api.example.test/api/v1',
+    );
+
+    expect(await repository.connectEmailAccount('google'), isTrue);
+    expect(paths, [
+      '/api/v1/auth/connect/google/start',
+      '/api/v1/auth/oauth/session/exchange',
+    ]);
+    expect(await store.readRefreshToken(), 'current-refresh-token');
+  });
+
+  test('activates an owned connected mailbox', () async {
+    final repository = SenderWhoRepository(
+      previewMode: false,
+      client: MockClient((request) async {
+        expect(request.method, 'POST');
+        expect(
+          request.url.path,
+          endsWith('/email-accounts/account-2/activate'),
+        );
+        return http.Response(
+          jsonEncode({'id': 'account-2', 'isActive': true}),
+          200,
+        );
+      }),
+      sessionStore: MemorySessionStore(),
+      baseUrl: 'https://api.example.test/api/v1',
+    );
+
+    expect(await repository.activateEmailAccount('account-2'), isTrue);
   });
 
   test('secure storage read failures do not crash app startup', () async {
@@ -676,6 +838,34 @@ void main() {
     expect(job?.id, 'job-1');
   });
 
+  test('active cleanup can be canceled with an idempotent request', () async {
+    final repository = SenderWhoRepository(
+      previewMode: false,
+      client: MockClient((request) async {
+        expect(request.method, 'POST');
+        expect(request.url.path, '/api/v1/cleanup/jobs/job-1/cancel');
+        expect(request.headers['Idempotency-Key'], isNotEmpty);
+        return http.Response(
+          jsonEncode({
+            'id': 'job-1',
+            'status': 'CANCELED',
+            'totalMessages': 10,
+            'processedMessages': 4,
+            'failedMessages': 0,
+          }),
+          200,
+        );
+      }),
+      sessionStore: MemorySessionStore(),
+      baseUrl: 'https://api.example.test/api/v1',
+    );
+
+    final job = await repository.cancelCleanupJob('job-1');
+
+    expect(job?.isCanceled, isTrue);
+    expect(job?.remainingMessages, 6);
+  });
+
   test('unsubscribe job normalizes status and sanitizes its safe reason', () {
     final job = UnsubscribeJobInfo.fromJson({
       'id': 'unsubscribe-1',
@@ -804,16 +994,85 @@ void main() {
     },
   );
 
+  test(
+    'all-matching trash resolves the scoped result set before mutation',
+    () async {
+      final requestedIds = <String>[];
+      final repository = SenderWhoRepository(
+        previewMode: false,
+        client: MockClient((request) async {
+          if (request.method == 'GET' && request.url.path == '/api/v1/emails') {
+            expect(request.url.queryParameters['senderId'], 'sender-1');
+            expect(request.url.queryParameters['mailbox'], 'ALL');
+            final page = request.url.queryParameters['page'];
+            final id = page == '1' ? 'message-1' : 'message-2';
+            return http.Response(
+              jsonEncode({
+                'items': [
+                  {
+                    'id': id,
+                    'senderId': 'sender-1',
+                    'sender': 'A very long sender name',
+                    'email': 'a-very-long-address@example.test',
+                    'subject': 'Message',
+                    'date': '2026-07-31T10:00:00.000Z',
+                  },
+                ],
+                'total': 2,
+                'page': int.parse(page!),
+                'limit': 100,
+                'hasMore': page == '1',
+              }),
+              200,
+            );
+          }
+          if (request.method == 'POST' &&
+              request.url.path == '/api/v1/emails/actions/trash') {
+            requestedIds.addAll(
+              (jsonDecode(request.body)['messageIds'] as List).cast<String>(),
+            );
+            return http.Response(
+              jsonEncode({
+                'action': 'trash',
+                'requested': 2,
+                'processed': 2,
+                'failed': 0,
+                'processedIds': ['message-1', 'message-2'],
+                'failures': <Object>[],
+              }),
+              200,
+            );
+          }
+          return http.Response('Not found', 404);
+        }),
+        sessionStore: MemorySessionStore(),
+        baseUrl: 'https://api.example.test/api/v1',
+      );
+
+      final result = await repository.applyEmailActionToAllMatching(
+        'trash',
+        mailbox: 'ALL',
+        senderId: 'sender-1',
+      );
+
+      expect(requestedIds, ['message-1', 'message-2']);
+      expect(result?.processed, 2);
+      expect(result?.failed, 0);
+    },
+  );
+
   test('canceled cleanup jobs are terminal and do not poll forever', () {
     final job = CleanupJobInfo.fromJson({
       'id': 'cleanup-canceled',
       'status': 'CANCELED',
       'totalMessages': 10,
       'processedMessages': 4,
-      'failedMessages': 6,
+      'failedMessages': 0,
     });
 
     expect(job.isFinished, isTrue);
+    expect(job.isCanceled, isTrue);
+    expect(job.remainingMessages, 6);
   });
 }
 
@@ -834,6 +1093,10 @@ class _FailingSessionStore implements SessionStore {
       throw StateError('Secure storage unavailable');
 
   @override
+  Future<String?> readRememberedProvider() =>
+      throw StateError('Secure storage unavailable');
+
+  @override
   Future<void> writeRefreshToken(String token) =>
       throw StateError('Secure storage unavailable');
 
@@ -843,5 +1106,9 @@ class _FailingSessionStore implements SessionStore {
 
   @override
   Future<void> writeRememberedEmail(String email) =>
+      throw StateError('Secure storage unavailable');
+
+  @override
+  Future<void> writeRememberedProvider(String provider) =>
       throw StateError('Secure storage unavailable');
 }

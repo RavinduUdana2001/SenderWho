@@ -104,6 +104,7 @@ model User {
   id                 String              @id @default(cuid())
   email              String              @unique
   googleSubject      String?             @unique @db.VarChar(255)
+  microsoftSubject   String?             @unique @db.VarChar(255)
   yahooSubject       String?             @unique @db.VarChar(255)
   displayName        String?
   avatarUrl          String?
@@ -213,8 +214,10 @@ model EmailAccount {
   refreshTokenEncrypted String?             @db.Text
   tokenExpiresAt        DateTime?
   scopes                Json?
+  isPrimary             Boolean             @default(false)
   syncStatus            SyncStatus          @default(PENDING)
   historyId             String?
+  providerSyncState     Json?
   backfillPageToken     String?             @db.Text
   backfillHistoryId     String?             @db.VarChar(255)
   backfillComplete      Boolean             @default(false)
@@ -235,6 +238,7 @@ model EmailAccount {
 
   @@unique([provider, providerAccountId])
   @@index([userId, emailAddress])
+  @@index([userId, isPrimary])
   @@index([syncStatus])
 }
 

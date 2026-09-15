@@ -85,6 +85,31 @@ describe("DatabaseJobQueueService", () => {
     );
   });
 
+  it("cancels an active durable job and releases its lease", async () => {
+    const updateMany = jest.fn().mockResolvedValue({ count: 1 });
+    const prisma = {
+      mockDataEnabled: false,
+      backgroundJob: { updateMany },
+    } as unknown as PrismaService;
+    const service = new DatabaseJobQueueService(prisma);
+
+    await expect(service.cancel("cleanup-1")).resolves.toBe(true);
+    expect(updateMany).toHaveBeenCalledWith({
+      where: {
+        id: "cleanup-1",
+        status: {
+          in: [BackgroundJobStatus.QUEUED, BackgroundJobStatus.RUNNING],
+        },
+      },
+      data: {
+        status: BackgroundJobStatus.CANCELED,
+        completedAt: expect.any(Date),
+        leaseOwner: null,
+        leaseExpiresAt: null,
+      },
+    });
+  });
+
   it("uses exponential delayed retries and stops at max attempts", async () => {
     const updateMany = jest.fn().mockResolvedValue({ count: 1 });
     const prisma = {

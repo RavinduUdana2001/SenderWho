@@ -1,6 +1,6 @@
 # SenderWho Email Provider Client Requirements
 
-This checklist explains what the client must provide before SenderWho can connect Gmail and Yahoo accounts in production, and how user permission should work inside the app.
+This checklist explains what the client must provide before SenderWho can connect Gmail, Microsoft Outlook, and Yahoo accounts in production, and how user permission should work inside the app.
 
 ## Short Answer
 
@@ -10,7 +10,7 @@ The correct flow is:
 
 ```text
 1. User logs into SenderWho.
-2. User taps Connect Gmail or Connect Yahoo.
+2. User taps Connect Gmail, Connect Microsoft Outlook, or Connect Yahoo.
 3. Provider consent opens in browser/system web auth.
 4. User grants the requested permissions once for that email account.
 5. Backend receives an authorization code or mailbox credential.
@@ -44,6 +44,7 @@ These are required because Google/Yahoo users must see who is asking for mailbox
 
 ```text
 https://senderwho.com/api/v1/auth/oauth/google/callback
+https://senderwho.com/api/v1/auth/oauth/microsoft/callback
 https://senderwho.com/api/v1/auth/oauth/yahoo/callback
 ```
 
@@ -105,6 +106,30 @@ https://mail.google.com/
 That broad Gmail scope can read, compose, send, and permanently delete all Gmail mail. For SenderWho, use narrower scopes wherever possible.
 
 Important: `gmail.metadata`, `gmail.readonly`, and `gmail.modify` are restricted Gmail scopes. A public app will need Google verification, and if restricted Gmail data is stored or transmitted through the backend, Google can require a security assessment.
+
+## Microsoft Outlook Setup
+
+Create a Microsoft Entra app registration for organizational and personal
+Microsoft accounts. Use the backend **Web** platform and this exact callback:
+
+```text
+https://senderwho.com/api/v1/auth/oauth/microsoft/callback
+```
+
+Add delegated Microsoft Graph `User.Read` and `Mail.ReadWrite` permissions.
+Create a backend Client Secret and configure:
+
+```text
+MICROSOFT_OAUTH_ENABLED=false
+MICROSOFT_CLIENT_ID=
+MICROSOFT_CLIENT_SECRET=
+MICROSOFT_OAUTH_CALLBACK_URL=https://senderwho.com/api/v1/auth/oauth/microsoft/callback
+```
+
+The client secret stays on the server. End users authenticate on Microsoft's
+page and grant their own mailbox access. Enable the feature flag only after the
+production acceptance test in the
+[Microsoft Outlook setup guide](microsoft_production_setup.md) passes.
 
 ## Yahoo Setup
 

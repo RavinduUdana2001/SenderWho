@@ -25,6 +25,9 @@ describe("validateEnvironment", () => {
     TRUST_PROXY_HOPS: "1",
     REQUEST_BODY_LIMIT: "256kb",
     SWAGGER_ENABLED: "false",
+    PUBLIC_LEGAL_NAME: "SenderWho",
+    PUBLIC_SUPPORT_EMAIL: "senderwho.app@gmail.com",
+    PUBLIC_LEGAL_EFFECTIVE_DATE: "2026-08-01",
   };
 
   it("accepts an explicit hardened production configuration", () => {
@@ -35,8 +38,8 @@ describe("validateEnvironment", () => {
     expect(() =>
       validateEnvironment({
         ...production,
-        PUBLIC_SUPPORT_EMAIL: "support@senderwho.com",
-        PUBLIC_LEGAL_EFFECTIVE_DATE: "2026-07-29",
+        PUBLIC_SUPPORT_EMAIL: "senderwho.app@gmail.com",
+        PUBLIC_LEGAL_EFFECTIVE_DATE: "2026-08-01",
       }),
     ).not.toThrow();
     expect(() =>
@@ -51,6 +54,21 @@ describe("validateEnvironment", () => {
         PUBLIC_LEGAL_EFFECTIVE_DATE: "29/07/2026",
       }),
     ).toThrow("must use the YYYY-MM-DD format");
+  });
+
+  it("requires a monitored support address in production", () => {
+    expect(() =>
+      validateEnvironment({
+        ...production,
+        PUBLIC_SUPPORT_EMAIL: "",
+      }),
+    ).toThrow("PUBLIC_SUPPORT_EMAIL is required in production");
+    expect(() =>
+      validateEnvironment({
+        ...production,
+        PUBLIC_SUPPORT_EMAIL: "support@REPLACE_WITH_DOMAIN.example",
+      }),
+    ).toThrow("PUBLIC_SUPPORT_EMAIL still contains a production placeholder");
   });
 
   it("requires Yahoo OAuth credentials in production", () => {
@@ -74,6 +92,30 @@ describe("validateEnvironment", () => {
         YAHOO_OAUTH_CALLBACK_URL: "",
       }),
     ).not.toThrow();
+  });
+
+  it("requires complete HTTPS Microsoft OAuth settings when enabled", () => {
+    expect(() =>
+      validateEnvironment({
+        ...production,
+        MICROSOFT_OAUTH_ENABLED: "true",
+        MICROSOFT_CLIENT_ID: "microsoft-client",
+        MICROSOFT_CLIENT_SECRET: "",
+        MICROSOFT_OAUTH_CALLBACK_URL:
+          "https://api.senderwho.example/api/v1/auth/oauth/microsoft/callback",
+      }),
+    ).toThrow("must be configured together");
+
+    expect(() =>
+      validateEnvironment({
+        ...production,
+        MICROSOFT_OAUTH_ENABLED: "true",
+        MICROSOFT_CLIENT_ID: "microsoft-client",
+        MICROSOFT_CLIENT_SECRET: "microsoft-secret",
+        MICROSOFT_OAUTH_CALLBACK_URL:
+          "http://api.senderwho.example/api/v1/auth/oauth/microsoft/callback",
+      }),
+    ).toThrow("MICROSOFT_OAUTH_CALLBACK_URL must use HTTPS");
   });
 
   it("requires complete Yahoo settings when a credential is configured", () => {
@@ -119,6 +161,24 @@ describe("validateEnvironment", () => {
         DB_CONNECTION_LIMIT: "20",
       }),
     ).toThrow("DB_CONNECTION_LIMIT must be an integer from 1 to 10");
+    expect(() =>
+      validateEnvironment({
+        ...production,
+        MESSAGE_RETENTION_DAYS: "500",
+      }),
+    ).toThrow("MESSAGE_RETENTION_DAYS must be an integer from 1 to 365");
+    expect(() =>
+      validateEnvironment({
+        ...production,
+        AUDIT_RETENTION_DAYS: "731",
+      }),
+    ).toThrow("AUDIT_RETENTION_DAYS must be an integer from 1 to 730");
+    expect(() =>
+      validateEnvironment({
+        ...production,
+        JOB_RETENTION_DAYS: "91",
+      }),
+    ).toThrow("JOB_RETENTION_DAYS must be an integer from 1 to 90");
   });
 
   it("requires certificate-validated MySQL transport by default", () => {

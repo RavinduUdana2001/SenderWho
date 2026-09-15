@@ -4,8 +4,11 @@ import '../models/app_models.dart';
 import '../screens/sender_details_screen.dart';
 import '../services/senderwho_repository.dart';
 import '../theme/app_colors.dart';
+import '../theme/app_motion.dart';
+import '../theme/app_semantic_colors.dart';
 import '../utils/responsive.dart';
 import '../widgets/app_card.dart';
+import '../widgets/app_animated_progress.dart';
 import '../widgets/app_chips.dart';
 import '../widgets/app_header.dart';
 import '../widgets/app_page.dart';
@@ -21,13 +24,13 @@ class SenderListArguments {
 
 Color _senderCategoryColor(BuildContext context, String category) {
   return switch (category.trim().toLowerCase()) {
-    'social' || 'newsletters' || 'travel' =>
-      AppColors.isDark(context) ? AppColors.brandCyan : const Color(0xFF087C98),
-    'promotions' || 'orders' || 'important' =>
-      AppColors.isDark(context) ? AppColors.warning : const Color(0xFFB86B00),
-    'spam' => AppColors.danger,
+    'social' || 'newsletters' || 'travel' => AppSemanticColors.of(context).info,
+    'promotions' ||
+    'orders' ||
+    'important' => AppSemanticColors.of(context).warning,
+    'spam' => Theme.of(context).colorScheme.error,
     'unknown' => AppColors.mutedFor(context),
-    _ => AppColors.primary,
+    _ => Theme.of(context).colorScheme.primary,
   };
 }
 
@@ -139,13 +142,13 @@ class _AllSendersScreenState extends State<AllSendersScreen> {
               icon: const Icon(Icons.refresh_rounded, size: 20),
             ),
           ),
-          SizedBox(height: context.gap(18)),
+          SizedBox(height: context.gap(14)),
           SearchBox(
             controller: _queryController,
             hint: 'Search name, email or domain',
             onSubmitted: (_) => _load(reset: true),
           ),
-          SizedBox(height: context.gap(16)),
+          SizedBox(height: context.gap(12)),
           SingleChildScrollView(
             scrollDirection: Axis.horizontal,
             physics: const BouncingScrollPhysics(),
@@ -165,7 +168,7 @@ class _AllSendersScreenState extends State<AllSendersScreen> {
               ],
             ),
           ),
-          SizedBox(height: context.gap(18)),
+          SizedBox(height: context.gap(14)),
           if (_loading && _senders.isEmpty)
             const _SenderListSkeleton()
           else if (_error != null)
@@ -234,16 +237,32 @@ class _AllSendersScreenState extends State<AllSendersScreen> {
               ),
             )
           else
-            Column(
-              children: [
-                for (var i = 0; i < _senders.length; i++) ...[
-                  SenderRow(
-                    sender: _senders[i],
-                    onChanged: () => _load(reset: true),
-                  ),
-                  if (i != _senders.length - 1) const SizedBox(height: 10),
-                ],
-              ],
+            AppCard(
+              padding: EdgeInsets.zero,
+              child: AnimatedSwitcher(
+                duration: AppMotion.responsive(context, AppMotion.standard),
+                switchInCurve: AppMotion.enter,
+                switchOutCurve: AppMotion.exit,
+                child: Column(
+                  key: ValueKey('sender-list-$_kind-${_senders.length}'),
+                  children: [
+                    for (var i = 0; i < _senders.length; i++) ...[
+                      SenderRow(
+                        sender: _senders[i],
+                        onChanged: () => _load(reset: true),
+                      ),
+                      if (i != _senders.length - 1)
+                        Divider(
+                          height: 1,
+                          indent: 64,
+                          color: AppColors.borderFor(
+                            context,
+                          ).withValues(alpha: 0.62),
+                        ),
+                    ],
+                  ],
+                ),
+              ),
             ),
           if (_inlineLoadError != null) ...[
             const SizedBox(height: 14),
@@ -298,7 +317,7 @@ class SenderRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return AppCard(
+    return InkWell(
       onTap: () async {
         await Navigator.pushNamed(
           context,
@@ -307,79 +326,80 @@ class SenderRow extends StatelessWidget {
         );
         onChanged();
       },
-      padding: const EdgeInsets.all(15),
-      child: Row(
-        children: [
-          _IdentityAvatar(sender: sender),
-          const SizedBox(width: 13),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
-                  children: [
-                    Flexible(
-                      child: Text(
-                        sender.name,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: Theme.of(context).textTheme.titleMedium,
-                      ),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 13),
+        child: Row(
+          children: [
+            _IdentityAvatar(sender: sender),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    sender.name,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: Theme.of(context).textTheme.titleMedium,
+                  ),
+                  const SizedBox(height: 3),
+                  Tooltip(
+                    message: sender.email,
+                    child: Text(
+                      sender.email,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: Theme.of(context).textTheme.bodySmall,
                     ),
-                  ],
-                ),
-                const SizedBox(height: 3),
-                Text(
-                  sender.email,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: Theme.of(context).textTheme.bodySmall,
-                ),
-                const SizedBox(height: 9),
-                Row(
-                  children: [
-                    if (sender.identityStatus == 'SUSPICIOUS')
-                      StatusChip(
-                        label: sender.identityRiskLevel == 'HIGH'
-                            ? 'High identity risk'
-                            : 'Possible impersonation',
-                        color: sender.identityRiskLevel == 'HIGH'
-                            ? AppColors.danger
-                            : AppColors.warning,
-                      )
-                    else if (sender.isTrusted)
-                      const StatusChip(
-                        label: 'Trusted by you',
-                        color: AppColors.success,
-                      )
-                    else
-                      StatusChip(
-                        label: sender.category,
-                        color: _senderCategoryColor(context, sender.category),
-                      ),
-                    const SizedBox(width: 7),
-                    Flexible(
-                      child: Text(
+                  ),
+                  const SizedBox(height: 8),
+                  Wrap(
+                    spacing: 8,
+                    runSpacing: 6,
+                    crossAxisAlignment: WrapCrossAlignment.center,
+                    children: [
+                      if (sender.identityStatus == 'SUSPICIOUS')
+                        StatusChip(
+                          label: sender.identityRiskLevel == 'HIGH'
+                              ? 'High identity risk'
+                              : 'Possible impersonation',
+                          color: sender.identityRiskLevel == 'HIGH'
+                              ? AppColors.danger
+                              : AppColors.warning,
+                        )
+                      else if (sender.isTrusted)
+                        const StatusChip(
+                          label: 'Trusted by you',
+                          color: AppColors.success,
+                        )
+                      else
+                        StatusChip(
+                          label: sender.category,
+                          color: _senderCategoryColor(context, sender.category),
+                        ),
+                      Text(
                         '${sender.totalMessages} messages · ${sender.unreadMessages} unread',
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
                         style: Theme.of(context).textTheme.labelSmall,
                       ),
-                    ),
-                  ],
-                ),
-              ],
+                    ],
+                  ),
+                ],
+              ),
             ),
-          ),
-          const SizedBox(width: 10),
-          _TrustScore(score: sender.score),
-          const SizedBox(width: 3),
-          Icon(
-            Icons.chevron_right_rounded,
-            size: 20,
-            color: AppColors.mutedFor(context),
-          ),
-        ],
+            const SizedBox(width: 10),
+            _TrustScore(
+              score: sender.score,
+              status: sender.identityStatus,
+              risk: sender.identityRiskLevel,
+            ),
+            const SizedBox(width: 3),
+            Icon(
+              Icons.chevron_right_rounded,
+              size: 20,
+              color: AppColors.mutedFor(context),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -400,23 +420,23 @@ class _IdentityAvatar extends StatelessWidget {
           label: '$label. ${sender.name}',
           image: true,
           child: SizedBox.square(
-            dimension: 48,
+            dimension: 40,
             child: Stack(
               clipBehavior: Clip.none,
               children: [
                 IconBubble(
                   icon: Icons.person_outline_rounded,
                   label: sender.initial,
-                  size: 48,
-                  iconSize: 24,
+                  size: 40,
+                  iconSize: 20,
                   backgroundColor: sender.color,
                 ),
                 Positioned(
                   right: -3,
                   bottom: -3,
                   child: Container(
-                    width: 19,
-                    height: 19,
+                    width: 17,
+                    height: 17,
                     alignment: Alignment.center,
                     decoration: BoxDecoration(
                       color: AppColors.surface(context),
@@ -428,7 +448,7 @@ class _IdentityAvatar extends StatelessWidget {
                     ),
                     child: Icon(
                       Icons.question_mark_rounded,
-                      size: 12,
+                      size: 10,
                       color: AppColors.mutedFor(context),
                     ),
                   ),
@@ -463,6 +483,7 @@ class _IdentityAvatar extends StatelessWidget {
       ),
       _ => (Icons.help_outline_rounded, AppColors.mutedFor(context), 'Unknown'),
     };
+    final visualColor = AppColors.visualAccentFor(context, color);
     return Tooltip(
       message: label,
       child: Semantics(
@@ -470,9 +491,9 @@ class _IdentityAvatar extends StatelessWidget {
         image: true,
         child: IconBubble(
           icon: icon,
-          size: 48,
-          iconSize: 24,
-          color: color,
+          size: 40,
+          iconSize: 20,
+          color: visualColor,
           backgroundColor: AppColors.softFill(context, color),
         ),
       ),
@@ -481,43 +502,41 @@ class _IdentityAvatar extends StatelessWidget {
 }
 
 class _TrustScore extends StatelessWidget {
-  const _TrustScore({required this.score});
+  const _TrustScore({
+    required this.score,
+    this.status = 'UNVERIFIED',
+    this.risk = 'LOW',
+  });
 
   final int score;
+  final String status;
+  final String risk;
 
   @override
   Widget build(BuildContext context) {
-    final indicatorColor = score >= 75
+    final indicatorColor = status == 'VERIFIED'
         ? AppColors.primary
-        : score >= 50
-        ? AppColors.mutedFor(context)
-        : AppColors.warning;
+        : status == 'SUSPICIOUS' && risk == 'HIGH'
+        ? AppColors.danger
+        : status == 'SUSPICIOUS'
+        ? AppColors.warning
+        : AppColors.mutedFor(context);
     return Tooltip(
       message: 'Sender confidence: $score out of 100',
       child: Semantics(
         label: 'Sender confidence $score out of 100',
-        child: SizedBox.square(
-          dimension: 42,
-          child: Stack(
-            fit: StackFit.expand,
-            children: [
-              CircularProgressIndicator(
-                value: score.clamp(0, 100) / 100,
-                strokeWidth: 3.5,
-                color: indicatorColor,
-                backgroundColor: AppColors.trackFor(context),
-                strokeCap: StrokeCap.round,
-              ),
-              Center(
-                child: Text(
-                  '$score',
-                  style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                    color: AppColors.textFor(context),
-                    fontWeight: FontWeight.w700,
-                  ),
-                ),
-              ),
-            ],
+        child: AppAnimatedProgressRing(
+          value: score / 100,
+          size: 36,
+          strokeWidth: 3.5,
+          color: AppColors.visualAccentFor(context, indicatorColor),
+          backgroundColor: AppColors.trackFor(context),
+          child: Text(
+            '$score',
+            style: Theme.of(context).textTheme.labelSmall?.copyWith(
+              color: AppColors.textFor(context),
+              fontWeight: FontWeight.w700,
+            ),
           ),
         ),
       ),

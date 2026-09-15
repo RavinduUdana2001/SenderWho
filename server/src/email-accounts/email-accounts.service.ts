@@ -7,7 +7,7 @@ import {
 } from "@nestjs/common";
 import { PrismaService } from "../database/prisma.service";
 import { InboxJobsService } from "../jobs/inbox-jobs.service";
-import { EmailProvider, JobStatus, SyncStatus } from "@prisma/client";
+import { EmailProvider, JobStatus, Prisma, SyncStatus } from "@prisma/client";
 import {
   TokenEncryptionService,
   googleProviderTokenContext,
@@ -33,6 +33,7 @@ export class EmailAccountsService {
             provider: "GOOGLE",
             emailAddress: "senderwho.demo@gmail.com",
             displayName: "Demo Gmail",
+            isActive: true,
             syncStatus: "READY",
             lastSyncedAt: new Date().toISOString(),
             createdAt: new Date().toISOString(),
@@ -43,12 +44,13 @@ export class EmailAccountsService {
 
     const accounts = await this.prisma.emailAccount.findMany({
       where: { userId },
-      orderBy: { createdAt: "desc" },
+      orderBy: [{ isPrimary: "desc" }, { createdAt: "desc" }],
       select: {
         id: true,
         provider: true,
         emailAddress: true,
         displayName: true,
+        isPrimary: true,
         syncStatus: true,
         lastSyncedAt: true,
         lastSyncError: true,
@@ -59,15 +61,100 @@ export class EmailAccountsService {
       },
     });
 
+    const eligibleAccounts = accounts.filter(
+      (account) => account.syncStatus !== SyncStatus.DISCONNECTED,
+    );
+    const currentAccount = eligibleAccounts.find(
+      (account) => account.isPrimary,
+    );
+    const selectedAccount = currentAccount ?? eligibleAccounts[0];
+    const primaryCount = accounts.filter((account) => account.isPrimary).length;
+    if (
+      primaryCount !== (selectedAccount ? 1 : 0) ||
+      (selectedAccount && !selectedAccount.isPrimary)
+    ) {
+      const operations: Prisma.PrismaPromise<unknown>[] = [
+        this.prisma.emailAccount.updateMany({
+          where: { userId, isPrimary: true },
+          data: { isPrimary: false },
+        }),
+      ];
+      if (selectedAccount) {
+        operations.push(
+          this.prisma.emailAccount.update({
+            where: { id: selectedAccount.id },
+            data: { isPrimary: true },
+          }),
+        );
+      }
+      await this.prisma.$transaction(operations);
+      for (const account of accounts) {
+        account.isPrimary = account.id === selectedAccount?.id;
+      }
+    }
+
     return {
-      items: accounts.map((account) => ({
+      items: accounts.map(({ isPrimary, ...account }) => ({
         ...account,
+        isActive: isPrimary,
         recoveryAction: getEmailAccountRecoveryAction(
           account.provider,
           account.syncStatus,
           account.lastSyncError,
         ),
       })),
+    };
+  }
+
+  async activate(userId: string, id: string) {
+    if (this.prisma.mockDataEnabled && id === "demo_gmail") {
+      return { id, isActive: true };
+    }
+
+    const account = await this.prisma.emailAccount.findFirst({
+      where: { id, userId },
+      select: { id: true, emailAddress: true, syncStatus: true },
+    });
+    if (!account) throw new NotFoundException("Email account was not found.");
+    if (account.syncStatus === SyncStatus.DISCONNECTED) {
+      throw new BadRequestException(
+        "Reconnect this email account before making it current.",
+      );
+    }
+
+    await this.prisma.$transaction([
+      this.prisma.emailAccount.updateMany({
+        where: { userId, isPrimary: true, id: { not: account.id } },
+        data: { isPrimary: false },
+      }),
+      this.prisma.emailAccount.update({
+        where: { id: account.id },
+        data: { isPrimary: true },
+      }),
+    ]);
+    try {
+      await this.prisma.auditLog.create({
+        data: {
+          userId,
+          action: "email_account.activated",
+          targetType: "EmailAccount",
+          targetId: account.id,
+        },
+      });
+    } catch (error) {
+      this.logger.error(
+        JSON.stringify({
+          event: "email_account.activate_audit.failed",
+          targetId: account.id,
+          errorType:
+            error instanceof Error ? error.constructor.name : "UnknownError",
+        }),
+      );
+    }
+    return {
+      id: account.id,
+      emailAddress: account.emailAddress,
+      isActive: true,
     };
   }
 
@@ -78,7 +165,11 @@ export class EmailAccountsService {
     });
     if (!account) throw new NotFoundException("Email account was not found.");
     const providerName =
-      account.provider === EmailProvider.YAHOO ? "Yahoo Mail" : "Gmail";
+      account.provider === EmailProvider.MICROSOFT
+        ? "Microsoft Outlook"
+        : account.provider === EmailProvider.YAHOO
+          ? "Yahoo Mail"
+          : "Gmail";
     if (account.syncStatus === SyncStatus.DISCONNECTED) {
       throw new BadRequestException(
         `Reconnect this ${providerName} account before starting a scan.`,
@@ -130,6 +221,7 @@ export class EmailAccountsService {
       return {
         id,
         syncStatus: "DISCONNECTED",
+        isActive: false,
       };
     }
 
@@ -141,6 +233,7 @@ export class EmailAccountsService {
         providerAccountId: true,
         refreshTokenEncrypted: true,
         accessTokenEncrypted: true,
+        isPrimary: true,
       },
     });
     if (!account) throw new NotFoundException("Email account was not found.");
@@ -155,6 +248,14 @@ export class EmailAccountsService {
           syncStartedAt: null,
           accessTokenEncrypted: null,
           refreshTokenEncrypted: null,
+          isPrimary: false,
+        },
+        select: {
+          id: true,
+          provider: true,
+          emailAddress: true,
+          syncStatus: true,
+          isPrimary: true,
         },
       }),
       this.prisma.cleanupJob.updateMany({
@@ -181,6 +282,23 @@ export class EmailAccountsService {
         },
       }),
     ]);
+    if (account.isPrimary) {
+      const fallback = await this.prisma.emailAccount.findFirst({
+        where: {
+          userId,
+          id: { not: account.id },
+          syncStatus: { not: SyncStatus.DISCONNECTED },
+        },
+        orderBy: { createdAt: "desc" },
+        select: { id: true },
+      });
+      if (fallback) {
+        await this.prisma.emailAccount.update({
+          where: { id: fallback.id },
+          data: { isPrimary: true },
+        });
+      }
+    }
     let providerRevoked = false;
     if (encryptedToken && account.provider === EmailProvider.GOOGLE) {
       try {
@@ -228,6 +346,7 @@ export class EmailAccountsService {
         }),
       );
     }
-    return { ...updated, providerRevoked };
+    const { isPrimary: _isPrimary, ...safeAccount } = updated;
+    return { ...safeAccount, isActive: false, providerRevoked };
   }
 }

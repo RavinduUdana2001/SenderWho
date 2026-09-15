@@ -14,6 +14,11 @@ export function validateEnvironment(environment: Environment): Environment {
   ) {
     throw new Error("PUBLIC_SUPPORT_EMAIL must be a valid email address.");
   }
+  if (environment.NODE_ENV === "production" && !publicSupportEmail) {
+    throw new Error(
+      "PUBLIC_SUPPORT_EMAIL is required in production and must be a monitored address.",
+    );
+  }
   const publicEffectiveDate = environment.PUBLIC_LEGAL_EFFECTIVE_DATE?.trim();
   if (
     publicEffectiveDate &&
@@ -30,6 +35,25 @@ export function validateEnvironment(environment: Environment): Environment {
   requireValue(environment, "GOOGLE_CLIENT_ID");
   requireValue(environment, "GOOGLE_CLIENT_SECRET");
   const callbackUrl = requireValue(environment, "GOOGLE_OAUTH_CALLBACK_URL");
+  const microsoftClientId = environment.MICROSOFT_CLIENT_ID?.trim();
+  const microsoftClientSecret = environment.MICROSOFT_CLIENT_SECRET?.trim();
+  const microsoftCallbackUrl = environment.MICROSOFT_OAUTH_CALLBACK_URL?.trim();
+  const microsoftConfigured = Boolean(
+    microsoftClientId || microsoftClientSecret,
+  );
+  const microsoftEnabled = environment.MICROSOFT_OAUTH_ENABLED === "true";
+  if (microsoftConfigured || microsoftEnabled) {
+    if (!microsoftClientId || !microsoftClientSecret || !microsoftCallbackUrl) {
+      throw new Error(
+        "MICROSOFT_CLIENT_ID, MICROSOFT_CLIENT_SECRET, and MICROSOFT_OAUTH_CALLBACK_URL must be configured together.",
+      );
+    }
+    try {
+      new URL(microsoftCallbackUrl);
+    } catch {
+      throw new Error("MICROSOFT_OAUTH_CALLBACK_URL must be a valid URL.");
+    }
+  }
   const yahooClientId =
     environment.YAHOO_CLIENT_ID?.trim() ??
     environment.YAHOO_CONSUMER_KEY?.trim();
@@ -81,8 +105,14 @@ export function validateEnvironment(environment: Environment): Environment {
       ["DATABASE_URL", environment.DATABASE_URL],
       ["GOOGLE_CLIENT_ID", environment.GOOGLE_CLIENT_ID],
       ["GOOGLE_CLIENT_SECRET", environment.GOOGLE_CLIENT_SECRET],
+      ["MICROSOFT_CLIENT_ID", environment.MICROSOFT_CLIENT_ID],
+      ["MICROSOFT_CLIENT_SECRET", environment.MICROSOFT_CLIENT_SECRET],
+      ["YAHOO_CLIENT_ID", environment.YAHOO_CLIENT_ID],
+      ["YAHOO_CLIENT_SECRET", environment.YAHOO_CLIENT_SECRET],
       ["JWT_SECRET", environment.JWT_SECRET],
       ["TOKEN_ENCRYPTION_KEYS", environment.TOKEN_ENCRYPTION_KEYS],
+      ["PUBLIC_LEGAL_NAME", environment.PUBLIC_LEGAL_NAME],
+      ["PUBLIC_SUPPORT_EMAIL", environment.PUBLIC_SUPPORT_EMAIL],
     ] as const) {
       if (value && /REPLACE_WITH|CHANGE_ME|YOUR_/i.test(value)) {
         throw new Error(`${key} still contains a production placeholder.`);
@@ -98,6 +128,9 @@ export function validateEnvironment(environment: Environment): Environment {
     validateIntegerRange(environment, "GMAIL_SYNC_BATCH_SIZE", 5, 25, 20);
     validateIntegerRange(environment, "GMAIL_SYNC_CONCURRENCY", 1, 8, 5);
     validateIntegerRange(environment, "DB_CONNECTION_LIMIT", 1, 10, 5);
+    validateIntegerRange(environment, "MESSAGE_RETENTION_DAYS", 1, 365, 365);
+    validateIntegerRange(environment, "AUDIT_RETENTION_DAYS", 1, 730, 730);
+    validateIntegerRange(environment, "JOB_RETENTION_DAYS", 1, 90, 90);
     const databaseUrl = new URL(environment.DATABASE_URL!);
     const privateDockerDataServices =
       environment.ALLOW_PRIVATE_DOCKER_DATA_SERVICES === "true";
@@ -128,6 +161,15 @@ export function validateEnvironment(environment: Environment): Environment {
     if (!callbackUrl.startsWith("https://")) {
       throw new Error(
         "GOOGLE_OAUTH_CALLBACK_URL must use HTTPS in production.",
+      );
+    }
+    if (
+      (microsoftConfigured || microsoftEnabled) &&
+      microsoftCallbackUrl &&
+      !microsoftCallbackUrl.startsWith("https://")
+    ) {
+      throw new Error(
+        "MICROSOFT_OAUTH_CALLBACK_URL must use HTTPS in production.",
       );
     }
     if (

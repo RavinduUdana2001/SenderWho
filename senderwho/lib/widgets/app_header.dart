@@ -24,7 +24,7 @@ class AppHeader extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return ConstrainedBox(
-      constraints: BoxConstraints(minHeight: subtitle == null ? 44 : 52),
+      constraints: BoxConstraints(minHeight: subtitle == null ? 44 : 58),
       child: Stack(
         alignment: Alignment.topCenter,
         children: [
@@ -40,7 +40,10 @@ class AppHeader extends StatelessWidget {
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                   textAlign: TextAlign.center,
-                  style: Theme.of(context).textTheme.titleLarge,
+                  style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                    fontWeight: FontWeight.w800,
+                    letterSpacing: -0.3,
+                  ),
                 ),
                 if (subtitle != null) ...[
                   const SizedBox(height: 3),
@@ -50,7 +53,7 @@ class AppHeader extends StatelessWidget {
                     maxLines: 2,
                     overflow: TextOverflow.ellipsis,
                     textAlign: TextAlign.center,
-                    style: Theme.of(context).textTheme.bodyMedium,
+                    style: Theme.of(context).textTheme.bodySmall,
                   ),
                 ],
               ],
@@ -92,12 +95,12 @@ class HeaderIconButton extends StatelessWidget {
       width: 44,
       height: 44,
       decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(14),
+        borderRadius: BorderRadius.circular(15),
         boxShadow: [
           BoxShadow(
             color: AppColors.shadowFor(context),
-            blurRadius: 14,
-            offset: const Offset(0, 6),
+            blurRadius: 10,
+            offset: const Offset(0, 3),
           ),
         ],
       ),
@@ -111,7 +114,7 @@ class HeaderIconButton extends StatelessWidget {
             color: AppColors.borderFor(context).withValues(alpha: 0.58),
           ),
           shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(14),
+            borderRadius: BorderRadius.circular(15),
           ),
         ),
         icon: Icon(icon, size: 21, color: AppColors.textFor(context)),

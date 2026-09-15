@@ -12,6 +12,8 @@ const DEFAULT_CONTEXT = "senderwho-provider-token";
 export const OAUTH_PKCE_CONTEXT = "senderwho-oauth-pkce";
 export const googleProviderTokenContext = (providerAccountId: string) =>
   `senderwho-google-token:${providerAccountId}`;
+export const microsoftProviderTokenContext = (providerAccountId: string) =>
+  `senderwho-microsoft-token:${providerAccountId}`;
 export const yahooProviderTokenContext = (providerAccountId: string) =>
   `senderwho-yahoo-token:${providerAccountId}`;
 

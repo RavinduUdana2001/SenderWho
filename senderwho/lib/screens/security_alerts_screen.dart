@@ -287,13 +287,25 @@ class SecurityAlertTile extends StatelessWidget {
           const SizedBox(height: 12),
           Row(
             children: [
-              Expanded(
+              Flexible(
+                flex: 3,
                 child: Text(
                   alert.reason,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
                   style: Theme.of(context).textTheme.labelSmall,
                 ),
               ),
-              Text(alert.time, style: Theme.of(context).textTheme.labelSmall),
+              const SizedBox(width: 8),
+              Flexible(
+                child: Text(
+                  alert.time,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  textAlign: TextAlign.end,
+                  style: Theme.of(context).textTheme.labelSmall,
+                ),
+              ),
             ],
           ),
         ],

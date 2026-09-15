@@ -8,12 +8,16 @@ describe("YahooSyncService", () => {
         updateMany: jest.fn().mockResolvedValue({ count: 1 }),
         findUniqueOrThrow: jest.fn().mockResolvedValue({
           userId: "user-1",
+          provider: "YAHOO",
           emailAddress: "person@yahoo.com",
           backfillPageToken: null,
           backfillComplete: false,
           backfillProcessed: 0,
         }),
         update: jest.fn().mockResolvedValue({}),
+      },
+      message: {
+        updateMany: jest.fn().mockResolvedValue({ count: 1 }),
       },
     };
     const yahooTokens = {
@@ -70,6 +74,77 @@ describe("YahooSyncService", () => {
         backfillPageToken: "50",
         backfillComplete: false,
       }),
+    });
+  });
+
+  it("moves newly synchronized mail from a blocked Yahoo sender to Trash", async () => {
+    const prisma = {
+      emailAccount: {
+        updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+        findUniqueOrThrow: jest.fn().mockResolvedValue({
+          userId: "user-1",
+          provider: "YAHOO",
+          emailAddress: "person@yahoo.com",
+          backfillPageToken: null,
+          backfillComplete: true,
+          backfillProcessed: 10,
+        }),
+        update: jest.fn().mockResolvedValue({}),
+      },
+      message: {
+        updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+      },
+    };
+    const yahooTokens = {
+      getAccessToken: jest.fn().mockResolvedValue("oauth-access-token"),
+    };
+    const yahoo = {
+      fetchInboxPage: jest.fn().mockResolvedValue({
+        messages: [
+          {
+            id: "yahoo-inbox-50",
+            threadId: "message-id",
+            labelIds: ["INBOX", "UNREAD"],
+          },
+        ],
+        discovered: 1,
+        highestUid: 50,
+      }),
+      applyMessageAction: jest.fn().mockResolvedValue({
+        providerMessageId: "yahoo-trash-12",
+      }),
+    };
+    const metadata = {
+      persistProviderMessage: jest.fn().mockResolvedValue(true),
+      recalculateAccount: jest.fn().mockResolvedValue(undefined),
+      refreshCleanupSuggestions: jest.fn().mockResolvedValue(undefined),
+    };
+    const service = new YahooSyncService(
+      new ConfigService({ gmailSync: { maxMessages: 500 } }),
+      prisma as never,
+      yahoo as never,
+      yahooTokens as never,
+      metadata as never,
+    );
+
+    await service.syncAccount("account-1");
+
+    expect(yahoo.applyMessageAction).toHaveBeenCalledWith(
+      "person@yahoo.com",
+      "oauth-access-token",
+      "yahoo-inbox-50",
+      "trash",
+    );
+    expect(prisma.message.updateMany).toHaveBeenCalledWith({
+      where: {
+        emailAccountId: "account-1",
+        providerMessageId: "yahoo-inbox-50",
+      },
+      data: {
+        isTrashed: true,
+        isArchived: false,
+        providerMessageId: "yahoo-trash-12",
+      },
     });
   });
 });

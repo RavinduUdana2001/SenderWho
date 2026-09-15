@@ -10,6 +10,7 @@ import { GmailApiError, GmailClient } from "../providers/gmail/gmail.client";
 import { GmailSyncService } from "../providers/gmail/gmail-sync.service";
 import { GoogleTokenService } from "../providers/google-token.service";
 import { YahooSyncService } from "../providers/yahoo/yahoo-sync.service";
+import { MicrosoftSyncService } from "../providers/microsoft/microsoft-sync.service";
 import { ProcessorJob } from "./database-job-queue.service";
 
 @Injectable()
@@ -22,6 +23,7 @@ export class CleanupProcessor {
     private readonly googleTokens: GoogleTokenService,
     private readonly gmailSync: GmailSyncService,
     private readonly yahooSync?: YahooSyncService,
+    private readonly microsoftSync?: MicrosoftSyncService,
   ) {}
 
   async process(job: ProcessorJob<{ cleanupJobId: string }>) {
@@ -41,10 +43,23 @@ export class CleanupProcessor {
     const metadata = cleanupJob.metadata as { categories?: string[] } | null;
     const categories = (metadata?.categories ?? []) as CleanupCategory[];
 
-    await this.prisma.cleanupJob.update({
-      where: { id: cleanupJob.id },
+    const started = await this.prisma.cleanupJob.updateMany({
+      where: {
+        id: cleanupJob.id,
+        status: { in: [JobStatus.QUEUED, JobStatus.RUNNING] },
+      },
       data: { status: JobStatus.RUNNING, startedAt: new Date() },
     });
+    if (started.count !== 1) {
+      const current = await this.prisma.cleanupJob.findUniqueOrThrow({
+        where: { id: cleanupJob.id },
+      });
+      return {
+        processedMessages: current.processedMessages,
+        failedMessages: current.failedMessages,
+        status: current.status,
+      };
+    }
 
     try {
       await this.prisma.cleanupJobItem.updateMany({
@@ -55,15 +70,20 @@ export class CleanupProcessor {
         where: { cleanupJobId: cleanupJob.id, status: "PENDING" },
         select: { id: true, messageId: true, providerMessageId: true },
       });
-      const provider = this.yahooSync
-        ? (
-            await this.prisma.emailAccount.findUniqueOrThrow({
-              where: { id: cleanupJob.emailAccountId },
-              select: { provider: true },
-            })
-          ).provider
-        : "GOOGLE";
-      if (provider !== "GOOGLE" && provider !== "YAHOO") {
+      const provider =
+        this.yahooSync || this.microsoftSync
+          ? (
+              await this.prisma.emailAccount.findUniqueOrThrow({
+                where: { id: cleanupJob.emailAccountId },
+                select: { provider: true },
+              })
+            ).provider
+          : "GOOGLE";
+      if (
+        provider !== "GOOGLE" &&
+        provider !== "YAHOO" &&
+        provider !== "MICROSOFT"
+      ) {
         throw new UnprocessableEntityException(
           `Mailbox provider ${provider} is not supported for cleanup.`,
         );
@@ -135,6 +155,14 @@ export class CleanupProcessor {
                   "trash",
                 )
               : null;
+          const microsoftResult =
+            provider === "MICROSOFT"
+              ? await this.microsoftSync!.applyMessageAction(
+                  cleanupJob.emailAccountId,
+                  item.providerMessageId,
+                  "trash",
+                )
+              : null;
           if (provider === "GOOGLE") {
             await this.gmail.trashMessage(accessToken, item.providerMessageId);
           }
@@ -146,7 +174,10 @@ export class CleanupProcessor {
               ...(yahooResult &&
               yahooResult.providerMessageId !== item.providerMessageId
                 ? { providerMessageId: yahooResult.providerMessageId }
-                : {}),
+                : microsoftResult &&
+                    microsoftResult.providerMessageId !== item.providerMessageId
+                  ? { providerMessageId: microsoftResult.providerMessageId }
+                  : {}),
             },
           });
           await this.prisma.cleanupJobItem.update({
@@ -199,15 +230,22 @@ export class CleanupProcessor {
       });
 
       const progress = await this.readProgress(cleanupJob.id);
+      const currentJob = await this.prisma.cleanupJob.findUnique({
+        where: { id: cleanupJob.id },
+        select: { status: true },
+      });
+      if (currentJob?.status === JobStatus.CANCELED) {
+        return this.finishCanceled(cleanupJob);
+      }
       const configuredAttempts = job.opts.attempts ?? 1;
       const isFinalAttempt = job.attemptsMade + 1 >= configuredAttempts;
       if (progress.retryableFailures > 0 && !isFinalAttempt) {
-        throw new Error("Some Gmail messages require a safe retry.");
+        throw new Error("Some mailbox messages require a safe retry.");
       }
       const finalStatus =
         progress.failedMessages > 0 ? JobStatus.FAILED : JobStatus.COMPLETED;
-      await this.prisma.cleanupJob.update({
-        where: { id: cleanupJob.id },
+      const finalized = await this.prisma.cleanupJob.updateMany({
+        where: { id: cleanupJob.id, status: JobStatus.RUNNING },
         data: {
           status: finalStatus,
           processedMessages: progress.processedMessages,
@@ -216,6 +254,19 @@ export class CleanupProcessor {
           activeKey: null,
         },
       });
+      if (finalized.count !== 1) {
+        const latest = await this.prisma.cleanupJob.findUniqueOrThrow({
+          where: { id: cleanupJob.id },
+        });
+        if (latest.status === JobStatus.CANCELED) {
+          return this.finishCanceled(cleanupJob);
+        }
+        return {
+          processedMessages: latest.processedMessages,
+          failedMessages: latest.failedMessages,
+          status: latest.status,
+        };
+      }
       await this.runPostCompletionTasks(
         cleanupJob,
         finalStatus,
@@ -229,10 +280,17 @@ export class CleanupProcessor {
         status: finalStatus,
       };
     } catch (error) {
+      const current = await this.prisma.cleanupJob.findUnique({
+        where: { id: cleanupJob.id },
+        select: { status: true },
+      });
+      if (current?.status === JobStatus.CANCELED) {
+        return this.finishCanceled(cleanupJob);
+      }
       const configuredAttempts = job.opts.attempts ?? 1;
       const isFinalAttempt = job.attemptsMade + 1 >= configuredAttempts;
-      await this.prisma.cleanupJob.update({
-        where: { id: cleanupJob.id },
+      await this.prisma.cleanupJob.updateMany({
+        where: { id: cleanupJob.id, status: JobStatus.RUNNING },
         data: {
           status: isFinalAttempt ? JobStatus.FAILED : JobStatus.QUEUED,
           completedAt: isFinalAttempt ? new Date() : null,
@@ -275,6 +333,7 @@ export class CleanupProcessor {
     return {
       processedMessages,
       retryableFailures,
+      skippedMessages,
       failedMessages: retryableFailures + skippedMessages,
     };
   }
@@ -286,8 +345,8 @@ export class CleanupProcessor {
     const progress = await this.readProgress(cleanupJobId);
     await Promise.all([
       job.updateProgress(progress),
-      this.prisma.cleanupJob.update({
-        where: { id: cleanupJobId },
+      this.prisma.cleanupJob.updateMany({
+        where: { id: cleanupJobId, status: JobStatus.RUNNING },
         data: {
           processedMessages: progress.processedMessages,
           failedMessages: progress.failedMessages,
@@ -296,16 +355,48 @@ export class CleanupProcessor {
     ]);
   }
 
+  private async finishCanceled(cleanupJob: {
+    id: string;
+    userId: string;
+    emailAccountId: string;
+  }) {
+    const progress = await this.readProgress(cleanupJob.id);
+    await this.prisma.cleanupJob.updateMany({
+      where: { id: cleanupJob.id, status: JobStatus.CANCELED },
+      data: {
+        processedMessages: progress.processedMessages,
+        failedMessages: progress.retryableFailures,
+        completedAt: new Date(),
+        activeKey: null,
+      },
+    });
+    await this.runPostCompletionTasks(
+      cleanupJob,
+      JobStatus.CANCELED,
+      progress.processedMessages,
+      progress.retryableFailures,
+      false,
+    );
+    return {
+      processedMessages: progress.processedMessages,
+      failedMessages: progress.retryableFailures,
+      status: JobStatus.CANCELED,
+    };
+  }
+
   private async runPostCompletionTasks(
     cleanupJob: { id: string; userId: string; emailAccountId: string },
     status: JobStatus,
     processedMessages: number,
     failedMessages: number,
+    audit = true,
   ) {
-    await this.safeAudit(cleanupJob.userId, cleanupJob.id, status, {
-      processedMessages,
-      failedMessages,
-    });
+    if (audit) {
+      await this.safeAudit(cleanupJob.userId, cleanupJob.id, status, {
+        processedMessages,
+        failedMessages,
+      });
+    }
     for (const task of [
       () => this.gmailSync.recalculateAccount(cleanupJob.emailAccountId),
       () => this.gmailSync.refreshCleanupSuggestions(cleanupJob.emailAccountId),

@@ -1,7 +1,13 @@
 import 'package:flutter/foundation.dart';
 
 abstract final class AppConfig {
+  static const productionSiteBaseUrl = 'https://senderwho.com';
   static const productionApiBaseUrl = 'https://senderwho.com/api/v1';
+  static const privacyPolicyUrl = '$productionSiteBaseUrl/privacy';
+  static const termsOfServiceUrl = '$productionSiteBaseUrl/terms';
+  static const supportUrl = '$productionSiteBaseUrl/support';
+  static const accountDeletionUrl = '$productionSiteBaseUrl/delete-account';
+  static const supportEmail = 'senderwho.app@gmail.com';
 
   static const apiBaseUrl = String.fromEnvironment(
     'SENDERWHO_API_URL',

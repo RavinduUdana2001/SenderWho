@@ -479,6 +479,7 @@ class _AlertActionButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final resolvedColor = AppColors.foregroundFor(context, color);
     return InkWell(
       onTap: onTap,
       borderRadius: BorderRadius.circular(14),
@@ -494,7 +495,7 @@ class _AlertActionButton extends StatelessWidget {
                 color: AppColors.softFill(context, color),
                 borderRadius: BorderRadius.circular(12),
               ),
-              child: Icon(icon, size: 19, color: color),
+              child: Icon(icon, size: 19, color: resolvedColor),
             ),
             const SizedBox(height: 6),
             Text(label, style: Theme.of(context).textTheme.labelSmall),
@@ -517,7 +518,7 @@ class _ReasonLine extends StatelessWidget {
       padding: const EdgeInsets.symmetric(vertical: 14),
       child: Row(
         children: [
-          Icon(icon, size: 18, color: AppColors.danger),
+          Icon(icon, size: 18, color: Theme.of(context).colorScheme.error),
           const SizedBox(width: 12),
           Expanded(
             child: Text(text, style: Theme.of(context).textTheme.bodyLarge),

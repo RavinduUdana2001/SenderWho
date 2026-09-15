@@ -563,6 +563,9 @@ class _UnsubscribeRow extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final jobStatus = _jobStatusPresentation(job, starting: starting);
+    final jobStatusColor = jobStatus == null
+        ? null
+        : AppColors.foregroundFor(context, jobStatus.color);
     return AppCard(
       onTap: candidate.id.isEmpty
           ? null
@@ -614,11 +617,11 @@ class _UnsubscribeRow extends StatelessWidget {
                           dimension: 13,
                           child: CircularProgressIndicator(
                             strokeWidth: 1.8,
-                            color: jobStatus.color,
+                            color: jobStatusColor,
                           ),
                         )
                       else
-                        Icon(jobStatus.icon, size: 15, color: jobStatus.color),
+                        Icon(jobStatus.icon, size: 15, color: jobStatusColor),
                       const SizedBox(width: 6),
                       Flexible(
                         child: Text(
@@ -628,7 +631,7 @@ class _UnsubscribeRow extends StatelessWidget {
                           overflow: TextOverflow.ellipsis,
                           style: Theme.of(context).textTheme.labelMedium
                               ?.copyWith(
-                                color: jobStatus.color,
+                                color: jobStatusColor,
                                 fontWeight: FontWeight.w800,
                               ),
                         ),
@@ -644,7 +647,7 @@ class _UnsubscribeRow extends StatelessWidget {
                       overflow: TextOverflow.ellipsis,
                       style: Theme.of(
                         context,
-                      ).textTheme.bodySmall?.copyWith(color: jobStatus.color),
+                      ).textTheme.bodySmall?.copyWith(color: jobStatusColor),
                     ),
                   ],
                 ],
@@ -802,8 +805,8 @@ class _UnsubscribeHero extends StatelessWidget {
                 Text(
                   '$count',
                   key: const ValueKey('unsubscribe-actionable-count'),
-                  style: const TextStyle(
-                    color: AppColors.danger,
+                  style: TextStyle(
+                    color: Theme.of(context).colorScheme.error,
                     fontSize: 34,
                     height: 1,
                     fontWeight: FontWeight.w900,

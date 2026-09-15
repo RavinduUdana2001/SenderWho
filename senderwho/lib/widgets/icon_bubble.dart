@@ -24,6 +24,7 @@ class IconBubble extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final resolvedColor = AppColors.foregroundFor(context, color);
     final fill = backgroundColor ?? AppColors.softFill(context, color);
     return Container(
       width: size,
@@ -32,9 +33,10 @@ class IconBubble extends StatelessWidget {
       decoration: BoxDecoration(
         color: fill,
         borderRadius: BorderRadius.circular(size * 0.32),
+        border: Border.all(color: resolvedColor.withValues(alpha: 0.18)),
       ),
       child: label == null
-          ? Icon(icon, color: color, size: iconSize)
+          ? Icon(icon, color: resolvedColor, size: iconSize)
           : Text(
               label!,
               style: Theme.of(context).textTheme.labelLarge?.copyWith(

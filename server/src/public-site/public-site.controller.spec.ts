@@ -7,8 +7,8 @@ describe("PublicSiteController", () => {
     new ConfigService({
       publicSite: {
         legalName: "SenderWho Labs",
-        supportEmail: "help@senderwho.com",
-        effectiveDate: "2026-07-29",
+        supportEmail: "senderwho.app@gmail.com",
+        effectiveDate: "2026-08-01",
       },
     }),
   );
@@ -32,13 +32,33 @@ describe("PublicSiteController", () => {
 
   it("publishes accurate privacy, support, and deletion information", () => {
     expect(controller.privacy()).toContain(
-      "We do not sell personal information",
+      "does not save the full body or attachment content",
     );
-    expect(controller.privacy()).toContain("July 29, 2026");
-    expect(controller.support()).toContain("help@senderwho.com");
+    expect(controller.privacy()).toContain(
+      "Google API and Yahoo data limited use",
+    );
+    expect(controller.privacy()).toContain("We do not sell mailbox data");
+    expect(controller.privacy()).toContain("August 1, 2026");
+    expect(controller.support()).toContain("senderwho.app@gmail.com");
     expect(controller.deleteAccount()).toContain("Delete SenderWho account");
     expect(controller.deleteAccount()).toContain(
       "does not delete the original messages",
+    );
+  });
+
+  it("publishes an exact app identity and explicit purpose for OAuth review", () => {
+    const home = controller.home();
+
+    expect(home).toContain('name="application-name" content="SenderWho"');
+    expect(home).toContain(
+      '<span class="app-name">SenderWho</span> helps you understand and manage your inbox.',
+    );
+    expect(home).toContain("What SenderWho does");
+    expect(home).toContain("Why SenderWho requests Gmail permission");
+    expect(home).toContain("uses Google OAuth");
+    expect(home).toContain("perform only the read, archive, restore, Trash");
+    expect(home).toContain(
+      "does not ask for a Google password, sell Google user data",
     );
   });
 

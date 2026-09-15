@@ -70,11 +70,31 @@ export class YahooSyncService {
       );
       let processed = 0;
       for (const message of page.messages) {
-        await this.metadata.persistProviderMessage(
+        const blocked = await this.metadata.persistProviderMessage(
           emailAccountId,
           account.userId,
           message,
         );
+        if (blocked && !(message.labelIds ?? []).includes("TRASH")) {
+          const moved = await this.applyMessageAction(
+            emailAccountId,
+            message.id,
+            "trash",
+          );
+          await this.prisma.message.updateMany({
+            where: {
+              emailAccountId,
+              providerMessageId: message.id,
+            },
+            data: {
+              isTrashed: true,
+              isArchived: false,
+              ...(moved.providerMessageId !== message.id
+                ? { providerMessageId: moved.providerMessageId }
+                : {}),
+            },
+          });
+        }
         processed += 1;
         if (processed % 25 === 0 || processed === page.discovered) {
           await onProgress?.(processed, page.discovered);

@@ -59,6 +59,7 @@ server/*.tsbuildinfo
 /*.zip
 /*.apk
 /release-archive/
+/release-previews/
 
 # Symbolication related
 app.*.symbols

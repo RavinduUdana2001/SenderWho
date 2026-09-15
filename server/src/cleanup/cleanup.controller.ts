@@ -25,6 +25,13 @@ export class CleanupController {
     return this.cleanupService.createJob(userId, body);
   }
 
+  @Post("jobs/:id/cancel")
+  @Idempotent("cleanup.cancel")
+  @Throttle({ default: { limit: 10, ttl: 60_000, blockDuration: 60_000 } })
+  cancelJob(@CurrentUser("id") userId: string, @Param("id") id: string) {
+    return this.cleanupService.cancelJob(userId, id);
+  }
+
   @Post("preview")
   @Throttle({ default: { limit: 30, ttl: 60_000, blockDuration: 60_000 } })
   preview(@CurrentUser("id") userId: string, @Body() body: PreviewCleanupDto) {

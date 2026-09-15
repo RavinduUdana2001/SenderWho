@@ -44,9 +44,10 @@ adapter to avoid native query-engine crashes on shared hosting.
 Copy every key from `.env.hostinger-shared.example` into hPanel's Environment
 Variables section, replace placeholders, and do not upload a real `.env` file.
 Do not manually set `PORT`; Hostinger supplies it to the application.
-Set `PUBLIC_LEGAL_NAME` to the owner/company name and
-`PUBLIC_SUPPORT_EMAIL` to a real monitored support address. These values are
-shown on the public privacy, terms, support, and account-deletion pages.
+Set `PUBLIC_LEGAL_NAME` to the owner/company name, use
+`PUBLIC_SUPPORT_EMAIL=senderwho.app@gmail.com`, and use
+`PUBLIC_LEGAL_EFFECTIVE_DATE=2026-08-01`. These values are shown on the public
+privacy, terms, support, and account-deletion pages.
 
 Generate secrets locally:
 
@@ -55,7 +56,7 @@ openssl rand -hex 64
 openssl rand -base64 32
 ```
 
-## 4. Domain and Google OAuth
+## 4. Domain and OAuth callbacks
 
 Connect `senderwho.com` to the Node.js application in hPanel. After SSL is
 active, add this exact redirect URI to the Google Cloud Web OAuth client:
@@ -66,6 +67,18 @@ https://senderwho.com/api/v1/auth/oauth/google/callback
 
 Update the domain in `CORS_ORIGINS` and `GOOGLE_OAUTH_CALLBACK_URL`, then
 restart/redeploy the application.
+
+For Microsoft Outlook, add the following **Web** redirect URI to the SenderWho
+Entra app registration:
+
+```text
+https://senderwho.com/api/v1/auth/oauth/microsoft/callback
+```
+
+Deploy first with `MICROSOFT_OAUTH_ENABLED=false`. Add the Application
+(client) ID, client-secret **Value**, and callback URL to hPanel, verify the
+health endpoints, then enable the flag and restart. The secret must remain in
+the backend environment and must never be included in the Flutter build.
 
 ## 5. Verify
 
@@ -82,8 +95,9 @@ https://senderwho.com/api/v1/health/ready
 ```
 
 The ready response must show both `mysql` and `databaseQueue` as `up`. Then log
-in with a test Gmail account and verify scan, cleanup, and one-click unsubscribe
-progress before releasing the Flutter production build.
+in with test Gmail and Outlook accounts and verify scan, cleanup, mailbox
+actions, and one-click unsubscribe progress before releasing the Flutter
+production build.
 
 ## Operational limits
 

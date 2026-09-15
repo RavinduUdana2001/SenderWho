@@ -10,10 +10,14 @@ import { AuthController } from "./auth.controller";
 describe("persistent app-session policy", () => {
   it.each([
     ["cleanup", CleanupController.prototype.createJob],
+    ["cancel cleanup", CleanupController.prototype.cancelJob],
     ["trash", EmailMessagesController.prototype.trash],
     ["resolve alert", SecurityAlertsController.prototype.resolve],
     ["dismiss alert", SecurityAlertsController.prototype.dismiss],
     ["disconnect account", EmailAccountsController.prototype.disconnect],
+    ["activate account", EmailAccountsController.prototype.activate],
+    ["connect Google account", AuthController.prototype.connectGoogleAccount],
+    ["connect Yahoo account", AuthController.prototype.connectYahooAccount],
     ["export data", UsersController.prototype.exportData],
     ["revoke session", AuthController.prototype.revokeSession],
     ["revoke all sessions", AuthController.prototype.revokeAllSessions],

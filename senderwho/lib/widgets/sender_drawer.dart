@@ -161,12 +161,17 @@ class SenderDrawer extends StatelessWidget {
                 Expanded(
                   child: ClipRect(
                     child: ListView.separated(
-                      padding: const EdgeInsets.only(bottom: 8),
+                      padding: const EdgeInsets.only(bottom: 12),
                       clipBehavior: Clip.hardEdge,
-                      itemCount: _items.length,
+                      itemCount: _items.length + 1,
                       separatorBuilder: (context, index) =>
                           const SizedBox(height: 3),
                       itemBuilder: (context, index) {
+                        if (index == _items.length) {
+                          return _SignOutTile(
+                            onSignOut: onSignOut ?? senderWhoRepository.logout,
+                          );
+                        }
                         final item = _items[index];
                         return _DrawerTile(
                           item: item,
@@ -178,9 +183,6 @@ class SenderDrawer extends StatelessWidget {
                       },
                     ),
                   ),
-                ),
-                _SignOutTile(
-                  onSignOut: onSignOut ?? senderWhoRepository.logout,
                 ),
               ],
             ),
@@ -237,38 +239,126 @@ class _SignOutTileState extends State<_SignOutTile> {
 
   @override
   Widget build(BuildContext context) {
-    return ListTile(
-      key: const ValueKey('drawer-sign-out'),
-      enabled: !_signingOut,
-      dense: true,
-      contentPadding: const EdgeInsets.symmetric(horizontal: 12),
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
-      leading: AnimatedSwitcher(
-        duration: const Duration(milliseconds: 180),
-        child: _signingOut
-            ? const SizedBox.square(
-                key: ValueKey('sign-out-loader'),
-                dimension: 20,
-                child: CircularProgressIndicator(strokeWidth: 2.2),
-              )
-            : const Icon(
-                Icons.logout_rounded,
-                key: ValueKey('sign-out-icon'),
-                color: AppColors.danger,
-                size: 20,
+    final isDark = AppColors.isDark(context);
+    final borderColor = AppColors.danger.withValues(alpha: isDark ? 0.3 : 0.17);
+
+    return Padding(
+      padding: const EdgeInsets.only(top: 10),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Divider(color: AppColors.borderFor(context)),
+          const SizedBox(height: 10),
+          Semantics(
+            button: true,
+            enabled: !_signingOut,
+            label: _signingOut
+                ? 'Signing out of SenderWho'
+                : 'Sign out of SenderWho on this device',
+            child: Material(
+              color: AppColors.softFill(context, AppColors.danger),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(16),
+                side: BorderSide(color: borderColor),
               ),
-      ),
-      title: AnimatedSwitcher(
-        duration: const Duration(milliseconds: 180),
-        child: Text(
-          _signingOut ? 'Signing out…' : 'Sign out',
-          key: ValueKey(_signingOut ? 'signing-out-label' : 'sign-out-label'),
-          style: Theme.of(context).textTheme.titleSmall?.copyWith(
-            color: _signingOut ? AppColors.mutedFor(context) : AppColors.danger,
+              clipBehavior: Clip.antiAlias,
+              child: InkWell(
+                key: const ValueKey('drawer-sign-out'),
+                onTap: _signingOut ? null : _signOut,
+                child: ConstrainedBox(
+                  constraints: const BoxConstraints(minHeight: 62),
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 12,
+                      vertical: 9,
+                    ),
+                    child: Row(
+                      children: [
+                        Container(
+                          width: 40,
+                          height: 40,
+                          decoration: BoxDecoration(
+                            color: AppColors.danger.withValues(
+                              alpha: isDark ? 0.2 : 0.11,
+                            ),
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                          alignment: Alignment.center,
+                          child: AnimatedSwitcher(
+                            duration: const Duration(milliseconds: 180),
+                            child: _signingOut
+                                ? const SizedBox.square(
+                                    key: ValueKey('sign-out-loader'),
+                                    dimension: 19,
+                                    child: CircularProgressIndicator(
+                                      color: AppColors.danger,
+                                      strokeWidth: 2.2,
+                                    ),
+                                  )
+                                : const Icon(
+                                    Icons.logout_rounded,
+                                    key: ValueKey('sign-out-icon'),
+                                    color: AppColors.danger,
+                                    size: 21,
+                                  ),
+                          ),
+                        ),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: Column(
+                            mainAxisSize: MainAxisSize.min,
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              AnimatedSwitcher(
+                                duration: const Duration(milliseconds: 180),
+                                child: Text(
+                                  _signingOut ? 'Signing out…' : 'Sign out',
+                                  key: ValueKey(
+                                    _signingOut
+                                        ? 'signing-out-label'
+                                        : 'sign-out-label',
+                                  ),
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: Theme.of(context).textTheme.titleSmall
+                                      ?.copyWith(
+                                        color: _signingOut
+                                            ? AppColors.mutedFor(context)
+                                            : AppColors.danger,
+                                        fontWeight: FontWeight.w700,
+                                      ),
+                                ),
+                              ),
+                              const SizedBox(height: 2),
+                              Text(
+                                'This device only',
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: Theme.of(context).textTheme.labelSmall
+                                    ?.copyWith(
+                                      color: AppColors.mutedFor(context),
+                                    ),
+                              ),
+                            ],
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        Icon(
+                          Icons.chevron_right_rounded,
+                          size: 20,
+                          color: _signingOut
+                              ? AppColors.mutedFor(context)
+                              : AppColors.danger.withValues(alpha: 0.8),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+            ),
           ),
-        ),
+        ],
       ),
-      onTap: _signingOut ? null : _signOut,
     );
   }
 }
@@ -280,6 +370,7 @@ class _DrawerAccountControls extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
     return Container(
       width: double.infinity,
       padding: const EdgeInsets.fromLTRB(8, 8, 6, 8),
@@ -308,15 +399,15 @@ class _DrawerAccountControls extends StatelessWidget {
                       height: 40,
                       decoration: BoxDecoration(
                         color: profileSelected
-                            ? AppColors.primary
+                            ? scheme.primary
                             : AppColors.softFill(context, AppColors.primary),
                         borderRadius: BorderRadius.circular(12),
                       ),
                       child: Icon(
                         Icons.person_outline_rounded,
                         color: profileSelected
-                            ? Colors.white
-                            : AppColors.primary,
+                            ? scheme.onPrimary
+                            : scheme.primary,
                         size: 20,
                       ),
                     ),
@@ -390,12 +481,13 @@ class _DrawerThemeToggleState extends State<_DrawerThemeToggle> {
   @override
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
+    final scheme = Theme.of(context).colorScheme;
     return Row(
       mainAxisSize: MainAxisSize.min,
       children: [
         Icon(
           isDark ? Icons.dark_mode_rounded : Icons.light_mode_outlined,
-          color: AppColors.primary,
+          color: scheme.primary,
           size: 19,
         ),
         Tooltip(
@@ -404,8 +496,8 @@ class _DrawerThemeToggleState extends State<_DrawerThemeToggle> {
             key: const ValueKey('drawer-dark-mode-switch'),
             value: isDark,
             onChanged: _saving ? null : _setDarkMode,
-            activeThumbColor: Colors.white,
-            activeTrackColor: AppColors.primary,
+            activeThumbColor: scheme.onPrimary,
+            activeTrackColor: scheme.primary,
             inactiveThumbColor: AppColors.mutedFor(context),
             inactiveTrackColor: AppColors.trackFor(context),
             trackOutlineColor: WidgetStatePropertyAll(
@@ -426,10 +518,11 @@ class _DrawerTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
     return ListTile(
       selected: selected,
       selectedTileColor: AppColors.softFill(context, AppColors.primary),
-      selectedColor: AppColors.primary,
+      selectedColor: scheme.primary,
       dense: true,
       minLeadingWidth: 20,
       contentPadding: const EdgeInsets.symmetric(horizontal: 11, vertical: 1),
@@ -440,14 +533,14 @@ class _DrawerTile extends StatelessWidget {
         height: 32,
         decoration: BoxDecoration(
           color: selected
-              ? AppColors.primary
+              ? scheme.primary
               : AppColors.softFill(context, AppColors.primary),
           borderRadius: BorderRadius.circular(10),
         ),
         child: Icon(
           item.icon,
           size: 17,
-          color: selected ? Colors.white : AppColors.primary,
+          color: selected ? scheme.onPrimary : scheme.primary,
         ),
       ),
       title: Text(
@@ -459,7 +552,7 @@ class _DrawerTile extends StatelessWidget {
       trailing: Icon(
         Icons.chevron_right_rounded,
         size: 18,
-        color: selected ? AppColors.primary : AppColors.mutedFor(context),
+        color: selected ? scheme.primary : AppColors.mutedFor(context),
       ),
       onTap: () {
         _openRootDestination(context, item.route, selected: selected);

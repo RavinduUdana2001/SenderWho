@@ -217,6 +217,85 @@ describe("CleanupService preview", () => {
     );
   });
 
+  it("cancels an owned active cleanup and leaves pending messages untouched", async () => {
+    const now = new Date();
+    const prisma = {
+      cleanupJob: {
+        findFirst: jest.fn().mockResolvedValue({
+          id: "job-1",
+          status: JobStatus.RUNNING,
+          totalMessages: 20,
+          processedMessages: 7,
+          failedMessages: 0,
+          startedAt: now,
+          completedAt: null,
+          createdAt: now,
+          updatedAt: now,
+        }),
+        updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+        update: jest.fn().mockResolvedValue({
+          id: "job-1",
+          status: JobStatus.CANCELED,
+          totalMessages: 20,
+          processedMessages: 7,
+          failedMessages: 1,
+          startedAt: now,
+          completedAt: now,
+          createdAt: now,
+          updatedAt: now,
+        }),
+      },
+      cleanupJobItem: {
+        updateMany: jest.fn().mockResolvedValue({ count: 12 }),
+        count: jest
+          .fn()
+          .mockImplementation(({ where }) =>
+            Promise.resolve(where.status === "COMPLETED" ? 7 : 1),
+          ),
+      },
+      auditLog: { create: jest.fn().mockResolvedValue({ id: "audit-1" }) },
+    };
+    const queue = { cancel: jest.fn().mockResolvedValue(true) };
+    const service = new CleanupService(prisma as never, queue as never);
+
+    await expect(service.cancelJob("user-1", "job-1")).resolves.toMatchObject({
+      id: "job-1",
+      status: JobStatus.CANCELED,
+      processedMessages: 7,
+      failedMessages: 1,
+    });
+    expect(prisma.cleanupJob.updateMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          id: "job-1",
+          userId: "user-1",
+          status: { in: [JobStatus.QUEUED, JobStatus.RUNNING] },
+        }),
+        data: expect.objectContaining({
+          status: JobStatus.CANCELED,
+          activeKey: null,
+        }),
+      }),
+    );
+    expect(queue.cancel).toHaveBeenCalledWith("cleanup-job-1");
+    expect(prisma.cleanupJobItem.updateMany).toHaveBeenCalledWith({
+      where: { cleanupJobId: "job-1", status: "PENDING" },
+      data: {
+        status: "SKIPPED",
+        errorCode: "USER_CANCELED",
+        processedAt: expect.any(Date),
+      },
+    });
+    expect(prisma.auditLog.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        userId: "user-1",
+        action: "cleanup.job.canceled",
+        targetId: "job-1",
+        metadata: { processedMessages: 7, canceledMessages: 12 },
+      }),
+    });
+  });
+
   it("finalizes a legacy active job that has no recoverable item snapshot", async () => {
     const orphaned = {
       id: "legacy-job",

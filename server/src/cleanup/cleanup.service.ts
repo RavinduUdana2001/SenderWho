@@ -309,6 +309,94 @@ export class CleanupService {
     return { items: activeJobs };
   }
 
+  async cancelJob(userId: string, id: string) {
+    const cleanupJob = await this.prisma.cleanupJob.findFirst({
+      where: { id, userId },
+      select: {
+        id: true,
+        status: true,
+        totalMessages: true,
+        processedMessages: true,
+        failedMessages: true,
+        startedAt: true,
+        completedAt: true,
+        createdAt: true,
+        updatedAt: true,
+      },
+    });
+    if (!cleanupJob) throw new NotFoundException("Cleanup job was not found.");
+    if (!ACTIVE_CLEANUP_STATUSES.includes(cleanupJob.status)) {
+      return cleanupJob;
+    }
+
+    const completedAt = new Date();
+    const canceled = await this.prisma.cleanupJob.updateMany({
+      where: {
+        id,
+        userId,
+        status: { in: ACTIVE_CLEANUP_STATUSES },
+      },
+      data: {
+        status: JobStatus.CANCELED,
+        completedAt,
+        activeKey: null,
+      },
+    });
+    if (canceled.count !== 1) return this.getJob(userId, id);
+
+    try {
+      await this.jobs.cancel(`cleanup-${id}`);
+    } catch (error) {
+      this.logger.warn(
+        JSON.stringify({
+          event: "cleanup.queue.cancel_failed",
+          targetId: id,
+          errorType:
+            error instanceof Error ? error.constructor.name : "UnknownError",
+        }),
+      );
+    }
+
+    await this.prisma.cleanupJobItem.updateMany({
+      where: { cleanupJobId: id, status: "PENDING" },
+      data: {
+        status: "SKIPPED",
+        errorCode: "USER_CANCELED",
+        processedAt: completedAt,
+      },
+    });
+    const [processedMessages, failedMessages] = await Promise.all([
+      this.prisma.cleanupJobItem.count({
+        where: { cleanupJobId: id, status: "COMPLETED" },
+      }),
+      this.prisma.cleanupJobItem.count({
+        where: { cleanupJobId: id, status: "FAILED" },
+      }),
+    ]);
+    const result = await this.prisma.cleanupJob.update({
+      where: { id },
+      data: { processedMessages, failedMessages },
+      select: {
+        id: true,
+        status: true,
+        totalMessages: true,
+        processedMessages: true,
+        failedMessages: true,
+        startedAt: true,
+        completedAt: true,
+        createdAt: true,
+        updatedAt: true,
+      },
+    });
+    await this.safeCancellationAudit(
+      userId,
+      id,
+      processedMessages,
+      Math.max(0, result.totalMessages - processedMessages - failedMessages),
+    );
+    return result;
+  }
+
   private async finalizeOrphanedJob(job: {
     id: string;
     userId?: string;
@@ -382,6 +470,34 @@ export class CleanupService {
           targetType: "CleanupJob",
           targetId: cleanupJobId,
           metadata: { categories, totalMessages },
+        },
+      });
+    } catch (error) {
+      this.logger.error(
+        JSON.stringify({
+          event: "cleanup.audit.failed",
+          targetId: cleanupJobId,
+          errorType:
+            error instanceof Error ? error.constructor.name : "UnknownError",
+        }),
+      );
+    }
+  }
+
+  private async safeCancellationAudit(
+    userId: string,
+    cleanupJobId: string,
+    processedMessages: number,
+    canceledMessages: number,
+  ) {
+    try {
+      await this.prisma.auditLog.create({
+        data: {
+          userId,
+          action: "cleanup.job.canceled",
+          targetType: "CleanupJob",
+          targetId: cleanupJobId,
+          metadata: { processedMessages, canceledMessages },
         },
       });
     } catch (error) {

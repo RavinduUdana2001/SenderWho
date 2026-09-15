@@ -59,7 +59,7 @@ class SenderWhoTagline extends StatelessWidget {
       maxLines: 1,
       overflow: TextOverflow.fade,
       style: Theme.of(context).textTheme.labelSmall?.copyWith(
-        color: AppColors.primary,
+        color: AppColors.primaryFor(context),
         fontSize: 8,
         fontWeight: FontWeight.w800,
         letterSpacing: 1.35,

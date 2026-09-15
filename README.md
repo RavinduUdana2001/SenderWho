@@ -18,6 +18,7 @@ The production backend/frontend plan is documented here:
 - [Production Architecture](docs/production_architecture.md)
 - [Email Provider Client Requirements](docs/email_provider_client_requirements.md)
 - [Yahoo Mail Production Setup](docs/yahoo_production_setup.md)
+- [Microsoft Outlook Production Setup](docs/microsoft_production_setup.md)
 - [Node.js Server Backend](server/README.md)
 
 ## Getting Started

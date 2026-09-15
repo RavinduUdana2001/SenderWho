@@ -1,6 +1,7 @@
 import { Injectable, UnprocessableEntityException } from "@nestjs/common";
 import { GmailSyncService } from "../providers/gmail/gmail-sync.service";
 import { YahooSyncService } from "../providers/yahoo/yahoo-sync.service";
+import { MicrosoftSyncService } from "../providers/microsoft/microsoft-sync.service";
 import { PrismaService } from "../database/prisma.service";
 import { ProcessorJob } from "./database-job-queue.service";
 
@@ -10,6 +11,7 @@ export class ScanInboxProcessor {
     private readonly prisma: PrismaService,
     private readonly gmailSync: GmailSyncService,
     private readonly yahooSync: YahooSyncService,
+    private readonly microsoftSync?: MicrosoftSyncService,
   ) {}
 
   async process(job: ProcessorJob<{ emailAccountId: string }>) {
@@ -22,7 +24,9 @@ export class ScanInboxProcessor {
         ? this.gmailSync.syncAccount.bind(this.gmailSync)
         : account.provider === "YAHOO"
           ? this.yahooSync.syncAccount.bind(this.yahooSync)
-          : null;
+          : account.provider === "MICROSOFT"
+            ? this.microsoftSync?.syncAccount.bind(this.microsoftSync)
+            : null;
     if (!sync) {
       throw new UnprocessableEntityException(
         `Mailbox provider ${account.provider} is not supported for scanning.`,

@@ -16,9 +16,10 @@ export default () => ({
   },
   publicSite: {
     legalName: process.env.PUBLIC_LEGAL_NAME?.trim() || "SenderWho",
-    supportEmail: process.env.PUBLIC_SUPPORT_EMAIL?.trim() || "",
+    supportEmail:
+      process.env.PUBLIC_SUPPORT_EMAIL?.trim() || "senderwho.app@gmail.com",
     effectiveDate:
-      process.env.PUBLIC_LEGAL_EFFECTIVE_DATE?.trim() || "2026-07-29",
+      process.env.PUBLIC_LEGAL_EFFECTIVE_DATE?.trim() || "2026-08-01",
   },
   databaseUrl: process.env.DATABASE_URL,
   auth: {
@@ -36,6 +37,7 @@ export default () => ({
       callbackUrl: process.env.GOOGLE_OAUTH_CALLBACK_URL,
     },
     microsoft: {
+      enabled: process.env.MICROSOFT_OAUTH_ENABLED === "true",
       clientId: process.env.MICROSOFT_CLIENT_ID,
       clientSecret: process.env.MICROSOFT_CLIENT_SECRET,
       callbackUrl: process.env.MICROSOFT_OAUTH_CALLBACK_URL,

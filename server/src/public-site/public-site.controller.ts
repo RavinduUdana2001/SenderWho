@@ -48,10 +48,13 @@ export class PublicSiteController {
   private details(): PublicSiteDetails {
     return {
       legalName: this.config.get<string>("publicSite.legalName", "SenderWho"),
-      supportEmail: this.config.get<string>("publicSite.supportEmail", ""),
+      supportEmail: this.config.get<string>(
+        "publicSite.supportEmail",
+        "senderwho.app@gmail.com",
+      ),
       effectiveDate: this.config.get<string>(
         "publicSite.effectiveDate",
-        "2026-07-29",
+        "2026-08-01",
       ),
     };
   }

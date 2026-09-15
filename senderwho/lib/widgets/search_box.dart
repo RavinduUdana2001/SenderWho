@@ -21,20 +21,13 @@ class SearchBox extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final field = Container(
-      height: 54,
+      height: 50,
       decoration: BoxDecoration(
         color: AppColors.elevatedSurface(context),
-        borderRadius: BorderRadius.circular(17),
+        borderRadius: BorderRadius.circular(15),
         border: Border.all(
-          color: AppColors.borderFor(context).withValues(alpha: 0.62),
+          color: AppColors.borderFor(context).withValues(alpha: 0.86),
         ),
-        boxShadow: [
-          BoxShadow(
-            color: AppColors.shadowFor(context),
-            blurRadius: 16,
-            offset: const Offset(0, 5),
-          ),
-        ],
       ),
       child: controller == null
           ? Row(
@@ -43,7 +36,7 @@ class SearchBox extends StatelessWidget {
                 Icon(
                   Icons.search_rounded,
                   size: 21,
-                  color: AppColors.mutedFor(context),
+                  color: AppColors.primaryFor(context),
                 ),
                 const SizedBox(width: 11),
                 Expanded(
@@ -72,10 +65,10 @@ class SearchBox extends StatelessWidget {
                 prefixIcon: Icon(
                   Icons.search_rounded,
                   size: 21,
-                  color: AppColors.mutedFor(context),
+                  color: AppColors.primaryFor(context),
                 ),
                 suffixIcon: trailing,
-                contentPadding: const EdgeInsets.symmetric(vertical: 16),
+                contentPadding: const EdgeInsets.symmetric(vertical: 13),
               ),
             ),
     );
@@ -83,7 +76,7 @@ class SearchBox extends StatelessWidget {
     return Material(
       color: Colors.transparent,
       child: InkWell(
-        borderRadius: BorderRadius.circular(17),
+        borderRadius: BorderRadius.circular(15),
         onTap: onTap,
         child: IgnorePointer(child: field),
       ),

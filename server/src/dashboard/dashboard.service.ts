@@ -88,7 +88,7 @@ export class DashboardService {
       }),
       this.prisma.emailAccount.findFirst({
         where: { userId },
-        orderBy: { createdAt: "desc" },
+        orderBy: [{ isPrimary: "desc" }, { createdAt: "desc" }],
         select: {
           id: true,
           provider: true,

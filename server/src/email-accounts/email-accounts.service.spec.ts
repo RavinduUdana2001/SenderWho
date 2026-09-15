@@ -115,6 +115,7 @@ describe("EmailAccountsService ownership", () => {
 
     await expect(service.disconnect("user-1", "account-1")).resolves.toEqual({
       ...disconnected,
+      isActive: false,
       providerRevoked: false,
     });
     expect(prisma.cleanupJob.updateMany).toHaveBeenCalledWith(
@@ -131,5 +132,127 @@ describe("EmailAccountsService ownership", () => {
         data: expect.objectContaining({ status: "CANCELED" }),
       }),
     );
+  });
+
+  it("rejects switching to an account owned by another user", async () => {
+    const { prisma, service } = setup();
+
+    await expect(
+      service.activate("owner-user", "foreign-account"),
+    ).rejects.toThrow("not found");
+    expect(prisma.emailAccount.findFirst).toHaveBeenCalledWith({
+      where: { id: "foreign-account", userId: "owner-user" },
+      select: { id: true, emailAddress: true, syncStatus: true },
+    });
+  });
+
+  it("selects a safe current mailbox for existing multi-account users", async () => {
+    const accounts = [
+      {
+        id: "account-2",
+        provider: "YAHOO",
+        emailAddress: "second@example.com",
+        displayName: "Second",
+        isPrimary: false,
+        syncStatus: "READY",
+        lastSyncedAt: null,
+        lastSyncError: null,
+        syncStartedAt: null,
+        backfillComplete: true,
+        backfillProcessed: 10,
+        createdAt: new Date(),
+      },
+      {
+        id: "account-1",
+        provider: "GOOGLE",
+        emailAddress: "first@example.com",
+        displayName: "First",
+        isPrimary: false,
+        syncStatus: "READY",
+        lastSyncedAt: null,
+        lastSyncError: null,
+        syncStartedAt: null,
+        backfillComplete: true,
+        backfillProcessed: 20,
+        createdAt: new Date(),
+      },
+    ];
+    const prisma = {
+      mockDataEnabled: false,
+      emailAccount: {
+        findMany: jest.fn().mockResolvedValue(accounts),
+        updateMany: jest.fn().mockResolvedValue({ count: 0 }),
+        update: jest.fn().mockResolvedValue({ id: "account-2" }),
+      },
+      $transaction: jest
+        .fn()
+        .mockImplementation((operations: Array<Promise<unknown>>) =>
+          Promise.all(operations),
+        ),
+    };
+    const service = new EmailAccountsService(
+      prisma as never,
+      {} as never,
+      {} as never,
+    );
+
+    const result = await service.listForCurrentUser("user-1");
+
+    expect(result.items).toEqual([
+      expect.objectContaining({ id: "account-2", isActive: true }),
+      expect.objectContaining({ id: "account-1", isActive: false }),
+    ]);
+    expect(prisma.emailAccount.update).toHaveBeenCalledWith({
+      where: { id: "account-2" },
+      data: { isPrimary: true },
+    });
+  });
+
+  it("switches the current mailbox in one transaction", async () => {
+    const prisma = {
+      mockDataEnabled: false,
+      emailAccount: {
+        findFirst: jest.fn().mockResolvedValue({
+          id: "account-2",
+          emailAddress: "second@example.com",
+          syncStatus: "READY",
+        }),
+        updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+        update: jest.fn().mockResolvedValue({
+          id: "account-2",
+          isPrimary: true,
+        }),
+      },
+      auditLog: { create: jest.fn().mockResolvedValue({}) },
+      $transaction: jest
+        .fn()
+        .mockImplementation((operations: Array<Promise<unknown>>) =>
+          Promise.all(operations),
+        ),
+    };
+    const service = new EmailAccountsService(
+      prisma as never,
+      {} as never,
+      {} as never,
+    );
+
+    await expect(service.activate("user-1", "account-2")).resolves.toEqual({
+      id: "account-2",
+      emailAddress: "second@example.com",
+      isActive: true,
+    });
+    expect(prisma.$transaction).toHaveBeenCalledTimes(1);
+    expect(prisma.emailAccount.updateMany).toHaveBeenCalledWith({
+      where: {
+        userId: "user-1",
+        isPrimary: true,
+        id: { not: "account-2" },
+      },
+      data: { isPrimary: false },
+    });
+    expect(prisma.emailAccount.update).toHaveBeenCalledWith({
+      where: { id: "account-2" },
+      data: { isPrimary: true },
+    });
   });
 });

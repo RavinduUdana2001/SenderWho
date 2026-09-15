@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
 import '../models/app_models.dart';
@@ -22,7 +24,10 @@ class EmailDetailsScreen extends StatefulWidget {
   State<EmailDetailsScreen> createState() => _EmailDetailsScreenState();
 }
 
-class _EmailDetailsScreenState extends State<EmailDetailsScreen> {
+class _EmailDetailsScreenState extends State<EmailDetailsScreen>
+    with WidgetsBindingObserver {
+  static const _automaticReadDelay = Duration(seconds: 2);
+
   EmailItem? _email;
   List<EmailItem> _thread = const [];
   EmailContent? _content;
@@ -34,9 +39,36 @@ class _EmailDetailsScreenState extends State<EmailDetailsScreen> {
   bool _changed = false;
   String? _error;
   String? _id;
+  Timer? _automaticReadTimer;
+  String? _automaticReadInFlightId;
+  final Set<String> _automaticReadHandledIds = <String>{};
 
   SenderWhoRepository get _repository =>
       widget.repository ?? senderWhoRepository;
+
+  bool get _interactionBusy => _busy || _automaticReadInFlightId != null;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+  }
+
+  @override
+  void dispose() {
+    _automaticReadTimer?.cancel();
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      _scheduleAutomaticRead(_email);
+    } else {
+      _automaticReadTimer?.cancel();
+    }
+  }
 
   @override
   void didChangeDependencies() {
@@ -81,16 +113,94 @@ class _EmailDetailsScreenState extends State<EmailDetailsScreen> {
           ? _repository.lastError ?? 'Message details could not be loaded.'
           : null;
     });
+    _scheduleAutomaticRead(resolvedEmail);
     if (resolvedEmail != null) await _loadContent(resolvedEmail.id);
   }
 
   void _selectThreadMessage(EmailItem email) {
-    if (_busy) return;
+    if (_interactionBusy) return;
+    _automaticReadTimer?.cancel();
     setState(() {
       _email = email;
       _id = email.id;
     });
+    _scheduleAutomaticRead(email);
     _loadContent(email.id);
+  }
+
+  void _scheduleAutomaticRead(EmailItem? email) {
+    _automaticReadTimer?.cancel();
+    if (email == null ||
+        email.id.isEmpty ||
+        email.isRead ||
+        _automaticReadHandledIds.contains(email.id)) {
+      return;
+    }
+    final messageId = email.id;
+    _automaticReadTimer = Timer(_automaticReadDelay, () {
+      _automaticReadTimer = null;
+      unawaited(_markReadAfterViewing(messageId));
+    });
+  }
+
+  Future<void> _markReadAfterViewing(String messageId) async {
+    if (!mounted || _id != messageId) return;
+    final email = _email;
+    if (email == null || email.isRead) return;
+    if (_busy) {
+      _automaticReadTimer = Timer(const Duration(milliseconds: 250), () {
+        _automaticReadTimer = null;
+        unawaited(_markReadAfterViewing(messageId));
+      });
+      return;
+    }
+
+    _automaticReadHandledIds.add(messageId);
+    setState(() {
+      _automaticReadInFlightId = messageId;
+      _changed = true;
+      _replaceReadState(messageId, true);
+    });
+    final result = await _repository.setEmailsRead([messageId], true);
+    final succeeded =
+        result != null && result.processed == 1 && result.failed == 0;
+    if (!mounted) return;
+    setState(() {
+      _automaticReadInFlightId = null;
+      if (!succeeded) _replaceReadState(messageId, false);
+    });
+    if (!succeeded) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Could not mark this message as read. Tap Read to retry.',
+          ),
+        ),
+      );
+    }
+  }
+
+  void _replaceReadState(String messageId, bool isRead) {
+    if (_email?.id == messageId) {
+      _email = _email!.copyWith(isRead: isRead);
+    }
+    _thread = _thread
+        .map(
+          (message) => message.id == messageId
+              ? message.copyWith(isRead: isRead)
+              : message,
+        )
+        .toList(growable: false);
+  }
+
+  Future<void> _openSenderDetails(String senderId) async {
+    _automaticReadTimer?.cancel();
+    await Navigator.pushNamed(
+      context,
+      SenderDetailsScreen.routeName,
+      arguments: senderId,
+    );
+    if (mounted) _scheduleAutomaticRead(_email);
   }
 
   Future<void> _loadContent(String id) async {
@@ -113,7 +223,11 @@ class _EmailDetailsScreenState extends State<EmailDetailsScreen> {
 
   Future<void> _act(String action, {bool? isRead}) async {
     final email = _email;
-    if (email == null || _busy) return;
+    if (email == null || _interactionBusy) return;
+    if (action == 'read-state') {
+      _automaticReadTimer?.cancel();
+      _automaticReadHandledIds.add(email.id);
+    }
     if (action == 'trash') {
       final confirmed = await showDialog<bool>(
         context: context,
@@ -163,7 +277,7 @@ class _EmailDetailsScreenState extends State<EmailDetailsScreen> {
   Future<void> _unsubscribe() async {
     final email = _email;
     final senderId = email?.senderId;
-    if (senderId == null || senderId.isEmpty || _busy) return;
+    if (senderId == null || senderId.isEmpty || _interactionBusy) return;
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
@@ -200,7 +314,53 @@ class _EmailDetailsScreenState extends State<EmailDetailsScreen> {
     );
   }
 
+  Future<void> _blockSender() async {
+    final email = _email;
+    final senderId = email?.senderId;
+    if (senderId == null || senderId.isEmpty || _interactionBusy) return;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text('Block ${email?.sender ?? 'this sender'}?'),
+        content: const Text(
+          'Future messages found during inbox scans will be moved to Trash. '
+          'Existing messages are not deleted, and you can unblock the sender later.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton.icon(
+            onPressed: () => Navigator.pop(context, true),
+            style: FilledButton.styleFrom(backgroundColor: AppColors.danger),
+            icon: const Icon(Icons.block_rounded),
+            label: const Text('Block sender'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+    setState(() => _busy = true);
+    final succeeded = await _repository.setSenderBlocked(senderId, true);
+    if (!mounted) return;
+    setState(() {
+      _busy = false;
+      if (succeeded) _changed = true;
+    });
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          succeeded
+              ? 'Sender blocked. Future messages will be moved to Trash.'
+              : _repository.lastError ?? 'The sender could not be blocked.',
+        ),
+      ),
+    );
+  }
+
   void _leaveDetails() {
+    _automaticReadTimer?.cancel();
     final changed = _changed;
     if (_changed) setState(() => _changed = false);
     Navigator.pop(context, changed);
@@ -285,11 +445,7 @@ class _EmailDetailsScreenState extends State<EmailDetailsScreen> {
                     const SizedBox(height: 16),
                     InkWell(
                       onTap: email.senderId?.isNotEmpty == true
-                          ? () => Navigator.pushNamed(
-                              context,
-                              SenderDetailsScreen.routeName,
-                              arguments: email.senderId,
-                            )
+                          ? () => _openSenderDetails(email.senderId!)
                           : null,
                       borderRadius: BorderRadius.circular(16),
                       child: Padding(
@@ -473,7 +629,7 @@ class _EmailDetailsScreenState extends State<EmailDetailsScreen> {
                             ? Icons.mark_email_unread_outlined
                             : Icons.mark_email_read_outlined,
                         label: email.isRead ? 'Unread' : 'Read',
-                        onTap: _busy
+                        onTap: _interactionBusy
                             ? null
                             : () => _act('read-state', isRead: !email.isRead),
                       ),
@@ -490,7 +646,7 @@ class _EmailDetailsScreenState extends State<EmailDetailsScreen> {
                               ? Icons.unarchive_outlined
                               : Icons.archive_outlined,
                           label: email.isArchived ? 'Inbox' : 'Archive',
-                          onTap: _busy
+                          onTap: _interactionBusy
                               ? null
                               : () => _act(
                                   email.isArchived ? 'unarchive' : 'archive',
@@ -512,7 +668,7 @@ class _EmailDetailsScreenState extends State<EmailDetailsScreen> {
                         color: email.isTrashed
                             ? AppColors.primary
                             : AppColors.danger,
-                        onTap: _busy
+                        onTap: _interactionBusy
                             ? null
                             : () => _act(email.isTrashed ? 'restore' : 'trash'),
                       ),
@@ -525,13 +681,27 @@ class _EmailDetailsScreenState extends State<EmailDetailsScreen> {
                 SizedBox(
                   width: double.infinity,
                   child: OutlinedButton.icon(
-                    onPressed: _busy ? null : _unsubscribe,
+                    onPressed: _interactionBusy ? null : _unsubscribe,
                     icon: const Icon(Icons.unsubscribe_rounded),
                     label: const Text('Unsubscribe from this sender'),
                   ),
                 ),
               ],
-              if (_busy) ...[
+              if (email.senderId?.isNotEmpty == true) ...[
+                const SizedBox(height: 10),
+                SizedBox(
+                  width: double.infinity,
+                  child: OutlinedButton.icon(
+                    onPressed: _interactionBusy ? null : _blockSender,
+                    style: OutlinedButton.styleFrom(
+                      foregroundColor: AppColors.danger,
+                    ),
+                    icon: const Icon(Icons.block_rounded),
+                    label: const Text('Block this sender'),
+                  ),
+                ),
+              ],
+              if (_interactionBusy) ...[
                 const SizedBox(height: 16),
                 const LinearProgressIndicator(
                   borderRadius: BorderRadius.all(Radius.circular(999)),
@@ -827,6 +997,7 @@ class _MessageActionButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final resolvedColor = AppColors.foregroundFor(context, color);
     return InkWell(
       borderRadius: BorderRadius.circular(14),
       onTap: onTap,
@@ -842,7 +1013,7 @@ class _MessageActionButton extends StatelessWidget {
                 color: AppColors.softFill(context, color),
                 borderRadius: BorderRadius.circular(12),
               ),
-              child: Icon(icon, size: 19, color: color),
+              child: Icon(icon, size: 19, color: resolvedColor),
             ),
             const SizedBox(height: 7),
             Text(

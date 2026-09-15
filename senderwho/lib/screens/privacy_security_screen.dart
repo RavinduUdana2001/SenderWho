@@ -1,12 +1,12 @@
 import 'package:flutter/material.dart';
-import 'package:share_plus/share_plus.dart';
 
+import '../config/app_config.dart';
 import '../models/app_models.dart';
 import '../screens/all_senders_screen.dart';
 import '../services/senderwho_repository.dart';
-import '../services/data_export_delivery.dart';
 import '../theme/app_colors.dart';
 import '../utils/responsive.dart';
+import '../utils/public_links.dart';
 import '../widgets/app_card.dart';
 import '../widgets/app_async_state.dart';
 import '../widgets/app_header.dart';
@@ -16,19 +16,10 @@ import '../widgets/section_title.dart';
 import 'settings_screen.dart';
 
 class PrivacySecurityScreen extends StatefulWidget {
-  const PrivacySecurityScreen({
-    super.key,
-    this.repository,
-    this.exportDelivery,
-  });
+  const PrivacySecurityScreen({super.key, this.repository});
 
   static const routeName = '/privacy-security';
   final SenderWhoRepository? repository;
-  final Future<ShareResult> Function(
-    Map<String, dynamic> export, {
-    Rect? sharePositionOrigin,
-  })?
-  exportDelivery;
 
   @override
   State<PrivacySecurityScreen> createState() => _PrivacySecurityScreenState();
@@ -114,37 +105,6 @@ class _PrivacySecurityScreenState extends State<PrivacySecurityScreen> {
         ),
       ),
     );
-  }
-
-  Future<void> _prepareExport() async {
-    if (_busy) return;
-    setState(() => _busy = true);
-    String message;
-    try {
-      final export = await _repository.prepareCompleteExport();
-      if (!mounted) return;
-      final renderBox = context.findRenderObject();
-      final origin = renderBox is RenderBox && renderBox.hasSize
-          ? renderBox.localToGlobal(Offset.zero) & renderBox.size
-          : null;
-      final deliver = widget.exportDelivery ?? deliverSenderWhoExport;
-      final result = await deliver(export, sharePositionOrigin: origin);
-      message = switch (result.status) {
-        ShareResultStatus.success => 'Your complete data export is ready.',
-        ShareResultStatus.dismissed => 'Export prepared. Sharing was canceled.',
-        ShareResultStatus.unavailable =>
-          'Export prepared, but file sharing is unavailable on this device.',
-      };
-    } on Object catch (error) {
-      message = error is SenderWhoRequestException
-          ? error.message
-          : _repository.lastError ?? 'Could not prepare the data export.';
-    }
-    if (!mounted) return;
-    setState(() => _busy = false);
-    ScaffoldMessenger.of(
-      context,
-    ).showSnackBar(SnackBar(content: Text(message)));
   }
 
   Future<void> _deleteAccount() async {
@@ -407,7 +367,7 @@ class _PrivacySecurityScreenState extends State<PrivacySecurityScreen> {
                           ),
                           const SizedBox(height: 8),
                           Text(
-                            'Your data is used only for sender verification, inbox organization, and security features. Retention: ${summary.dataRetention}.',
+                            'SenderWho stores mailbox metadata and short previews to provide inbox, sender, cleanup, unsubscribe, and security features. Full message text is retrieved only when you open a message. Retention: ${summary.dataRetention}.',
                             style: Theme.of(context).textTheme.bodySmall,
                           ),
                         ],
@@ -424,11 +384,25 @@ class _PrivacySecurityScreenState extends State<PrivacySecurityScreen> {
                 child: Column(
                   children: [
                     SettingsTile(
-                      icon: Icons.download_outlined,
-                      title: 'Download or share data export',
-                      subtitle:
-                          'All SenderWho sections in one portable JSON file',
-                      onTap: _busy ? null : _prepareExport,
+                      icon: Icons.policy_outlined,
+                      title: 'Privacy Policy',
+                      subtitle: 'How SenderWho accesses and protects your data',
+                      onTap: () => openSenderWhoPublicPage(
+                        context,
+                        url: AppConfig.privacyPolicyUrl,
+                        pageName: 'the Privacy Policy',
+                      ),
+                    ),
+                    const Divider(height: 1, indent: 20, endIndent: 20),
+                    SettingsTile(
+                      icon: Icons.info_outline_rounded,
+                      title: 'Account deletion information',
+                      subtitle: 'What is deleted and how to make a request',
+                      onTap: () => openSenderWhoPublicPage(
+                        context,
+                        url: AppConfig.accountDeletionUrl,
+                        pageName: 'account deletion information',
+                      ),
                     ),
                     const Divider(height: 1, indent: 20, endIndent: 20),
                     SettingsTile(

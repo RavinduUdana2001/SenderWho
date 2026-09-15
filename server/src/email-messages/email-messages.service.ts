@@ -14,6 +14,8 @@ import {
 import { GmailSyncService } from "../providers/gmail/gmail-sync.service";
 import { GoogleTokenService } from "../providers/google-token.service";
 import { YahooSyncService } from "../providers/yahoo/yahoo-sync.service";
+import { MicrosoftGraphError } from "../providers/microsoft/microsoft-graph.client";
+import { MicrosoftSyncService } from "../providers/microsoft/microsoft-sync.service";
 import { ListMessagesDto, MessageMailbox } from "./dto/list-messages.dto";
 
 type MessageAction =
@@ -35,6 +37,7 @@ export class EmailMessagesService {
     private readonly googleTokens: GoogleTokenService,
     private readonly gmailSync: GmailSyncService,
     private readonly yahooSync?: YahooSyncService,
+    private readonly microsoftSync?: MicrosoftSyncService,
   ) {}
 
   async list(userId: string, query: ListMessagesDto) {
@@ -70,7 +73,7 @@ export class EmailMessagesService {
         emailAccount: { select: { emailAddress: true } },
       },
     });
-    if (!message) throw new NotFoundException("Gmail message was not found.");
+    if (!message) throw new NotFoundException("Email message was not found.");
     return this.toMessageItem(message);
   }
 
@@ -79,7 +82,7 @@ export class EmailMessagesService {
       where: { id, userId },
       select: { id: true, emailAccountId: true, threadId: true },
     });
-    if (!anchor) throw new NotFoundException("Gmail message was not found.");
+    if (!anchor) throw new NotFoundException("Email message was not found.");
 
     const messages = await this.prisma.message.findMany({
       where: anchor.threadId
@@ -119,6 +122,18 @@ export class EmailMessagesService {
         throw new NotFoundException("Yahoo message content is unavailable.");
       }
       const content = await this.yahooSync.getMessageContent(
+        stored.emailAccountId,
+        stored.providerMessageId,
+      );
+      return { id: stored.id, ...content };
+    }
+    if (stored.emailAccount.provider === "MICROSOFT") {
+      if (!this.microsoftSync) {
+        throw new NotFoundException(
+          "Microsoft Outlook message content is unavailable.",
+        );
+      }
+      const content = await this.microsoftSync.getMessageContent(
         stored.emailAccountId,
         stored.providerMessageId,
       );
@@ -302,6 +317,9 @@ export class EmailMessagesService {
     if (account.provider === "YAHOO") {
       return this.applyYahooAccountAction(emailAccountId, messages, action);
     }
+    if (account.provider === "MICROSOFT") {
+      return this.applyMicrosoftAccountAction(emailAccountId, messages, action);
+    }
     if (account.provider !== "GOOGLE") {
       return {
         processedIds: [] as string[],
@@ -404,6 +422,46 @@ export class EmailMessagesService {
     await this.mapWithConcurrency(messages, 2, async (message) => {
       try {
         const result = await this.yahooSync!.applyMessageAction(
+          emailAccountId,
+          message.providerMessageId,
+          action,
+        );
+        if (result.providerMessageId !== message.providerMessageId) {
+          await this.prisma.message.update({
+            where: { id: message.id },
+            data: { providerMessageId: result.providerMessageId },
+          });
+        }
+        processedIds.push(message.id);
+      } catch (error) {
+        failures.push({
+          messageId: message.id,
+          reason: this.safeProviderError(error),
+        });
+      }
+    });
+    return { processedIds, failures };
+  }
+
+  private async applyMicrosoftAccountAction(
+    emailAccountId: string,
+    messages: StoredMessage[],
+    action: MessageAction,
+  ) {
+    if (!this.microsoftSync) {
+      return {
+        processedIds: [] as string[],
+        failures: messages.map((message) => ({
+          messageId: message.id,
+          reason: "Microsoft Outlook actions are unavailable.",
+        })),
+      };
+    }
+    const processedIds: string[] = [];
+    const failures: Array<{ messageId: string; reason: string }> = [];
+    await this.mapWithConcurrency(messages, 4, async (message) => {
+      try {
+        const result = await this.microsoftSync!.applyMessageAction(
           emailAccountId,
           message.providerMessageId,
           action,
@@ -606,7 +664,10 @@ export class EmailMessagesService {
     if (error instanceof GmailApiError) {
       return `Gmail returned status ${error.status}.`;
     }
-    return "The Gmail action could not be completed.";
+    if (error instanceof MicrosoftGraphError) {
+      return "Microsoft Outlook could not complete this action. Please try again.";
+    }
+    return "The mailbox action could not be completed.";
   }
 
   private toMessageContent(id: string, message: GmailMessage) {

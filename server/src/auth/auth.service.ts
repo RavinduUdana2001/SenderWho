@@ -5,7 +5,6 @@ import {
   GoneException,
   Injectable,
   Logger,
-  NotImplementedException,
   ServiceUnavailableException,
   UnauthorizedException,
 } from "@nestjs/common";
@@ -29,11 +28,13 @@ import {
   OAUTH_PKCE_CONTEXT,
   TokenEncryptionService,
   googleProviderTokenContext,
+  microsoftProviderTokenContext,
   yahooProviderTokenContext,
 } from "../common/security/token-encryption.service";
 import { PrismaService } from "../database/prisma.service";
 import { InboxJobsService } from "../jobs/inbox-jobs.service";
 import { GmailClient } from "../providers/gmail/gmail.client";
+import { MicrosoftGraphClient } from "../providers/microsoft/microsoft-graph.client";
 import { YahooImapClient } from "../providers/yahoo/yahoo-imap.client";
 import { AccessTokenPayload } from "./auth-user.interface";
 
@@ -85,6 +86,40 @@ interface YahooIdTokenClaims {
   nonce?: string;
 }
 
+interface MicrosoftTokenResponse {
+  access_token?: string;
+  expires_in?: number;
+  refresh_token?: string;
+  id_token?: string;
+  scope?: string;
+  token_type?: string;
+  error?: string;
+  error_description?: string;
+}
+
+interface MicrosoftIdTokenClaims {
+  sub?: string;
+  oid?: string;
+  tid?: string;
+  aud?: string | string[];
+  iss?: string;
+  exp?: number;
+  iat?: number;
+  nonce?: string;
+  email?: string;
+  preferred_username?: string;
+  name?: string;
+}
+
+interface MicrosoftJwk {
+  kid?: string;
+  alg?: string;
+  kty?: string;
+  n?: string;
+  e?: string;
+  use?: string;
+}
+
 interface YahooJwk {
   kid?: string;
   alg?: string;
@@ -106,7 +141,17 @@ const GOOGLE_SCOPES = [
   "https://www.googleapis.com/auth/userinfo.email",
   "https://www.googleapis.com/auth/gmail.modify",
 ];
+const MICROSOFT_SCOPES = [
+  "openid",
+  "profile",
+  "email",
+  "offline_access",
+  "User.Read",
+  "Mail.ReadWrite",
+];
+const MICROSOFT_IDENTITY_SCOPES = ["openid", "profile", "email", "User.Read"];
 const YAHOO_SCOPES = ["openid", "email", "profile", "mail-r", "mail-w"];
+const YAHOO_IDENTITY_SCOPES = ["openid", "email", "profile"];
 const LOGIN_SESSION_TTL_MS = 10 * 60 * 1_000;
 const OIDC_CLOCK_SKEW_SECONDS = 60;
 
@@ -129,12 +174,14 @@ export class AuthService {
     private readonly tokenEncryption: TokenEncryptionService,
     private readonly inboxJobs: InboxJobsService,
     private readonly yahooImap?: YahooImapClient,
+    private readonly microsoftGraph?: MicrosoftGraphClient,
   ) {}
 
   availableProviders() {
     return {
       providers: {
         google: { enabled: true },
+        microsoft: { enabled: this.isMicrosoftOAuthEnabled() },
         yahoo: { enabled: this.isYahooOAuthEnabled() },
       },
     };
@@ -143,20 +190,18 @@ export class AuthService {
   async startOAuth(
     provider: OAuthProvider,
     options: {
-      purpose?: "LOGIN" | "REAUTH";
+      purpose?: "LOGIN" | "REAUTH" | "ADD_ACCOUNT";
       userId?: string;
       appSessionId?: string;
       loginHint?: string;
     } = {},
   ) {
-    if (provider !== "google" && provider !== "yahoo") {
-      throw new NotImplementedException(
-        `${provider} OAuth is not configured yet.`,
-      );
-    }
-
     const providerConfig =
-      provider === "google" ? this.getGoogleConfig() : this.getYahooConfig();
+      provider === "google"
+        ? this.getGoogleConfig()
+        : provider === "microsoft"
+          ? this.getMicrosoftConfig()
+          : this.getYahooConfig();
     const sessionSecret = this.randomToken(32);
     const pkceVerifier = this.randomToken(48);
     const pkceChallenge = createHash("sha256")
@@ -170,8 +215,7 @@ export class AuthService {
     const loginSession = await this.prisma.oAuthLoginSession.create({
       data: {
         secretHash: this.hashToken(sessionSecret),
-        provider:
-          provider === "google" ? EmailProvider.GOOGLE : EmailProvider.YAHOO,
+        provider: this.emailProvider(provider),
         purpose: options.purpose ?? "LOGIN",
         userId: options.userId,
         appSessionId: options.appSessionId,
@@ -187,10 +231,7 @@ export class AuthService {
     });
     const state = await this.jwtService.signAsync(
       {
-        purpose:
-          options.purpose === "REAUTH"
-            ? "email-account-reauth"
-            : "email-account-oauth",
+        purpose: this.oauthStatePurpose(options.purpose ?? "LOGIN"),
         provider,
         loginSessionId: loginSession.id,
       } satisfies OAuthState,
@@ -199,7 +240,9 @@ export class AuthService {
     const authorizationUrl = new URL(
       provider === "google"
         ? "https://accounts.google.com/o/oauth2/v2/auth"
-        : "https://api.login.yahoo.com/oauth2/request_auth",
+        : provider === "microsoft"
+          ? "https://login.microsoftonline.com/common/oauth2/v2.0/authorize"
+          : "https://api.login.yahoo.com/oauth2/request_auth",
     );
 
     authorizationUrl.searchParams.set("client_id", providerConfig.clientId);
@@ -210,13 +253,29 @@ export class AuthService {
     authorizationUrl.searchParams.set("response_type", "code");
     authorizationUrl.searchParams.set(
       "scope",
-      (provider === "google" ? GOOGLE_SCOPES : YAHOO_SCOPES).join(" "),
+      (provider === "google"
+        ? GOOGLE_SCOPES
+        : provider === "microsoft"
+          ? options.purpose === "REAUTH"
+            ? MICROSOFT_IDENTITY_SCOPES
+            : MICROSOFT_SCOPES
+          : options.purpose === "REAUTH"
+            ? YAHOO_IDENTITY_SCOPES
+            : YAHOO_SCOPES
+      ).join(" "),
     );
     // Do not force the consent screen for returning users. Google will still
     // request consent on the first authorization or whenever scopes change.
     if (provider === "google") {
       authorizationUrl.searchParams.set("access_type", "offline");
       authorizationUrl.searchParams.set("include_granted_scopes", "true");
+      if (options.loginHint) {
+        authorizationUrl.searchParams.set("login_hint", options.loginHint);
+      } else {
+        authorizationUrl.searchParams.set("prompt", "select_account");
+      }
+    } else if (provider === "microsoft") {
+      authorizationUrl.searchParams.set("response_mode", "query");
       if (options.loginHint) {
         authorizationUrl.searchParams.set("login_hint", options.loginHint);
       } else {
@@ -237,7 +296,11 @@ export class AuthService {
     };
   }
 
-  async startReauthentication(userId: string, appSessionId: string) {
+  async startReauthentication(
+    userId: string,
+    appSessionId: string,
+    provider: OAuthProvider = "google",
+  ) {
     const session = await this.prisma.appSession.findFirst({
       where: {
         id: appSessionId,
@@ -250,10 +313,63 @@ export class AuthService {
     if (!session) {
       throw new UnauthorizedException("The current app session is invalid.");
     }
-    return this.startOAuth("google", {
+    return this.startOAuth(provider, {
       purpose: "REAUTH",
       userId,
       appSessionId: session.id,
+    });
+  }
+
+  async startIdentityReauthentication(userId: string, appSessionId: string) {
+    const user = await this.prisma.user.findFirst({
+      where: { id: userId, deletedAt: null },
+      select: {
+        googleSubject: true,
+        microsoftSubject: true,
+        yahooSubject: true,
+      },
+    });
+    if (!user) {
+      throw new UnauthorizedException("The signed-in user was not found.");
+    }
+    const provider: OAuthProvider | null = user.googleSubject
+      ? "google"
+      : user.microsoftSubject
+        ? "microsoft"
+        : user.yahooSubject
+          ? "yahoo"
+          : null;
+    if (!provider) {
+      throw new UnauthorizedException(
+        "Reconnect the account used to sign in before continuing.",
+      );
+    }
+    return this.startReauthentication(userId, appSessionId, provider);
+  }
+
+  async startAccountConnection(
+    provider: OAuthProvider,
+    userId: string,
+    appSessionId: string,
+    loginHint?: string,
+  ) {
+    const session = await this.prisma.appSession.findFirst({
+      where: {
+        id: appSessionId,
+        userId,
+        revokedAt: null,
+        expiresAt: { gt: new Date() },
+      },
+      select: { id: true },
+    });
+    if (!session) {
+      throw new UnauthorizedException("The current app session is invalid.");
+    }
+    return this.startOAuth(provider, {
+      purpose: "ADD_ACCOUNT",
+      userId,
+      appSessionId: session.id,
+      loginHint,
     });
   }
 
@@ -262,15 +378,12 @@ export class AuthService {
     code: string,
     state?: string,
   ) {
-    if (provider !== "google" && provider !== "yahoo") {
-      throw new NotImplementedException(
-        `${provider} OAuth is not configured yet.`,
-      );
-    }
-
     const loginSession = await this.verifyState(provider, state);
     if (provider === "yahoo") {
       return this.handleYahooOAuthCallback(code, loginSession);
+    }
+    if (provider === "microsoft") {
+      return this.handleMicrosoftOAuthCallback(code, loginSession);
     }
     try {
       const google = this.getGoogleConfig();
@@ -344,8 +457,18 @@ export class AuthService {
             providerAccountId,
           },
         },
-        select: { refreshTokenEncrypted: true, userId: true },
+        select: { id: true, refreshTokenEncrypted: true, userId: true },
       });
+
+      if (
+        loginSession.purpose === "ADD_ACCOUNT" &&
+        existingAccount &&
+        existingAccount.userId !== loginSession.userId
+      ) {
+        throw new ConflictException(
+          "This Gmail account is already connected to another SenderWho profile.",
+        );
+      }
 
       if (
         loginSession.purpose === "REAUTH" &&
@@ -397,13 +520,14 @@ export class AuthService {
         );
       }
 
-      const user = await this.resolveGoogleUser(
-        providerAccountId,
-        emailAddress,
-        loginSession.purpose === "REAUTH"
-          ? loginSession.userId!
-          : existingAccount?.userId,
-      );
+      const user =
+        loginSession.purpose === "ADD_ACCOUNT"
+          ? await this.accountConnectionUser(loginSession)
+          : await this.resolveGoogleUser(
+              providerAccountId,
+              emailAddress,
+              existingAccount?.userId,
+            );
       const accessTokenEncrypted = this.tokenEncryption.encrypt(
         tokens.access_token,
         googleProviderTokenContext(providerAccountId),
@@ -426,8 +550,7 @@ export class AuthService {
         },
         create: {
           userId: user.id,
-          provider:
-            provider === "google" ? EmailProvider.GOOGLE : EmailProvider.YAHOO,
+          provider: this.emailProvider(provider),
           providerAccountId,
           emailAddress,
           accessTokenEncrypted,
@@ -447,6 +570,7 @@ export class AuthService {
           lastSyncError: null,
         },
       });
+      await this.makeEmailAccountPrimary(user.id, emailAccount.id);
 
       await this.safeAudit({
         userId: user.id,
@@ -515,9 +639,11 @@ export class AuthService {
     try {
       const payload = await this.jwtService.verifyAsync<OAuthState>(state);
       if (
-        !["email-account-oauth", "email-account-reauth"].includes(
-          payload.purpose ?? "",
-        ) ||
+        ![
+          "email-account-oauth",
+          "email-account-reauth",
+          "email-account-connect",
+        ].includes(payload.purpose ?? "") ||
         !payload.loginSessionId
       ) {
         return;
@@ -558,7 +684,7 @@ export class AuthService {
     if (loginSession.status === OAuthLoginStatus.FAILED) {
       return {
         status: OAuthLoginStatus.FAILED,
-        error: loginSession.error ?? "Google sign-in failed.",
+        error: loginSession.error ?? "Email account sign-in failed.",
       };
     }
     if (
@@ -609,6 +735,45 @@ export class AuthService {
         appSession.id,
         authenticatedAt,
       );
+    }
+
+    if (loginSession.purpose === "ADD_ACCOUNT") {
+      if (!loginSession.appSessionId) {
+        throw new UnauthorizedException(
+          "Account connection is not bound to an app session.",
+        );
+      }
+      await this.prisma.$transaction(async (transaction) => {
+        const claimed = await transaction.oAuthLoginSession.updateMany({
+          where: { id: sessionId, status: OAuthLoginStatus.COMPLETED },
+          data: {
+            status: OAuthLoginStatus.EXCHANGED,
+            exchangedAt: new Date(),
+          },
+        });
+        if (claimed.count !== 1) {
+          throw new ConflictException(
+            "This account connection was already completed.",
+          );
+        }
+        const activeSession = await transaction.appSession.count({
+          where: {
+            id: loginSession.appSessionId!,
+            userId: loginSession.user!.id,
+            revokedAt: null,
+            expiresAt: { gt: new Date() },
+          },
+        });
+        if (activeSession !== 1) {
+          throw new UnauthorizedException(
+            "The app session used to connect this account is no longer active.",
+          );
+        }
+      });
+      return {
+        status: "ACCOUNT_CONNECTED" as const,
+        user: loginSession.user,
+      };
     }
 
     const refreshToken = this.randomToken(48);
@@ -872,15 +1037,69 @@ export class AuthService {
     }
   }
 
+  private oauthStatePurpose(purpose: string) {
+    return purpose === "REAUTH"
+      ? "email-account-reauth"
+      : purpose === "ADD_ACCOUNT"
+        ? "email-account-connect"
+        : "email-account-oauth";
+  }
+
+  private async accountConnectionUser(loginSession: {
+    userId: string | null;
+    appSessionId: string | null;
+  }) {
+    if (!loginSession.userId || !loginSession.appSessionId) {
+      throw new UnauthorizedException(
+        "Account connection is not bound to the signed-in user.",
+      );
+    }
+    const [user, session] = await Promise.all([
+      this.prisma.user.findFirst({
+        where: { id: loginSession.userId, deletedAt: null },
+      }),
+      this.prisma.appSession.findFirst({
+        where: {
+          id: loginSession.appSessionId,
+          userId: loginSession.userId,
+          revokedAt: null,
+          expiresAt: { gt: new Date() },
+        },
+        select: { id: true },
+      }),
+    ]);
+    if (!user || !session) {
+      throw new UnauthorizedException(
+        "The app session used to connect this account is no longer active.",
+      );
+    }
+    return user;
+  }
+
+  private async makeEmailAccountPrimary(userId: string, accountId: string) {
+    await this.prisma.$transaction([
+      this.prisma.emailAccount.updateMany({
+        where: { userId, isPrimary: true, id: { not: accountId } },
+        data: { isPrimary: false },
+      }),
+      this.prisma.emailAccount.update({
+        where: { id: accountId },
+        data: { isPrimary: true },
+      }),
+    ]);
+  }
+
   private async verifyState(provider: OAuthProvider, state?: string) {
     if (!state) throw new BadRequestException("OAuth state is missing.");
 
     try {
       const payload = await this.jwtService.verifyAsync<OAuthState>(state);
       if (
-        !["email-account-oauth", "email-account-reauth"].includes(
-          payload.purpose ?? "",
-        ) ||
+        ![
+          "email-account-oauth",
+          "email-account-reauth",
+          "email-account-connect",
+        ].includes(payload.purpose ?? "") ||
         payload.provider !== provider ||
         !payload.loginSessionId
       ) {
@@ -889,8 +1108,7 @@ export class AuthService {
       const loginSession = await this.prisma.oAuthLoginSession.findFirst({
         where: {
           id: payload.loginSessionId,
-          provider:
-            provider === "google" ? EmailProvider.GOOGLE : EmailProvider.YAHOO,
+          provider: this.emailProvider(provider),
           status: OAuthLoginStatus.PENDING,
           expiresAt: { gt: new Date() },
         },
@@ -904,10 +1122,7 @@ export class AuthService {
         },
       });
       if (!loginSession) throw new Error("OAuth login session is unavailable.");
-      const expectedPurpose =
-        loginSession.purpose === "REAUTH"
-          ? "email-account-reauth"
-          : "email-account-oauth";
+      const expectedPurpose = this.oauthStatePurpose(loginSession.purpose);
       if (payload.purpose !== expectedPurpose) {
         throw new Error("OAuth purpose does not match the login session.");
       }
@@ -1031,6 +1246,42 @@ export class AuthService {
     return { clientId, clientSecret, callbackUrl };
   }
 
+  private getMicrosoftConfig() {
+    if (!this.isMicrosoftOAuthEnabled()) {
+      throw new ServiceUnavailableException(
+        "Microsoft Outlook sign-in is not available yet.",
+      );
+    }
+    const clientId = this.config.get<string>("oauth.microsoft.clientId");
+    const clientSecret = this.config.get<string>(
+      "oauth.microsoft.clientSecret",
+    );
+    const callbackUrl = this.config.get<string>("oauth.microsoft.callbackUrl");
+    if (!clientId || !clientSecret || !callbackUrl) {
+      throw new ServiceUnavailableException(
+        "Microsoft OAuth credentials are not configured in server/.env.",
+      );
+    }
+    return { clientId, clientSecret, callbackUrl };
+  }
+
+  private isMicrosoftOAuthEnabled() {
+    return (
+      this.config.get<boolean>("oauth.microsoft.enabled", false) === true &&
+      Boolean(this.config.get<string>("oauth.microsoft.clientId")) &&
+      Boolean(this.config.get<string>("oauth.microsoft.clientSecret")) &&
+      Boolean(this.config.get<string>("oauth.microsoft.callbackUrl"))
+    );
+  }
+
+  private emailProvider(provider: OAuthProvider) {
+    return provider === "google"
+      ? EmailProvider.GOOGLE
+      : provider === "microsoft"
+        ? EmailProvider.MICROSOFT
+        : EmailProvider.YAHOO;
+  }
+
   private getYahooConfig() {
     if (!this.isYahooOAuthEnabled()) {
       throw new ServiceUnavailableException(
@@ -1055,6 +1306,267 @@ export class AuthService {
       Boolean(this.config.get<string>("oauth.yahoo.clientSecret")) &&
       Boolean(this.config.get<string>("oauth.yahoo.callbackUrl"))
     );
+  }
+
+  private async handleMicrosoftOAuthCallback(
+    code: string,
+    loginSession: {
+      id: string;
+      pkceVerifierEncrypted: string;
+      nonceHash: string;
+      purpose: string;
+      userId: string | null;
+      appSessionId: string | null;
+    },
+  ) {
+    try {
+      const microsoft = this.getMicrosoftConfig();
+      const tokens = await this.exchangeMicrosoftCode(
+        code,
+        microsoft,
+        this.tokenEncryption.decrypt(
+          loginSession.pkceVerifierEncrypted,
+          OAUTH_PKCE_CONTEXT,
+        ),
+      );
+      if (!tokens.access_token) {
+        throw new BadGatewayException(
+          "Microsoft did not return an OAuth access token.",
+        );
+      }
+      if (!tokens.id_token) {
+        throw new BadGatewayException("Microsoft did not return an ID token.");
+      }
+      if (!this.microsoftGraph) {
+        throw new ServiceUnavailableException(
+          "Microsoft Outlook connection is unavailable.",
+        );
+      }
+
+      const [identity, profile] = await Promise.all([
+        this.validateMicrosoftIdToken(
+          tokens.id_token,
+          microsoft.clientId,
+          loginSession.nonceHash,
+        ),
+        this.microsoftGraph.getProfile(tokens.access_token),
+      ]);
+      if (!identity.sub || !profile.id) {
+        throw new UnauthorizedException(
+          "Microsoft did not return a valid account identity.",
+        );
+      }
+      if (identity.oid && identity.oid !== profile.id) {
+        throw new UnauthorizedException(
+          "Microsoft identity and Outlook account do not match.",
+        );
+      }
+      const emailAddress = this.microsoftEmail(identity, profile);
+      const providerAccountId = profile.id;
+      const scopes = (tokens.scope ?? "").split(/\s+/).filter(Boolean);
+      const normalizedScopes = new Set(
+        scopes.map((scope) => scope.toLowerCase()),
+      );
+      if (
+        !normalizedScopes.has("user.read") ||
+        (loginSession.purpose !== "REAUTH" &&
+          !normalizedScopes.has("mail.readwrite"))
+      ) {
+        throw new UnauthorizedException(
+          "Microsoft did not grant the required Outlook read and write permissions.",
+        );
+      }
+
+      if (this.prisma.mockDataEnabled) {
+        return {
+          success: true,
+          provider: "microsoft" as const,
+          emailAddress,
+          emailAccountId: `microsoft:${providerAccountId}`,
+          persisted: false,
+          reauthenticated: loginSession.purpose === "REAUTH",
+        };
+      }
+
+      const existingAccount = await this.prisma.emailAccount.findFirst({
+        where: {
+          provider: EmailProvider.MICROSOFT,
+          OR: [{ providerAccountId }, { emailAddress }],
+        },
+        select: {
+          id: true,
+          userId: true,
+          refreshTokenEncrypted: true,
+        },
+      });
+      if (
+        loginSession.purpose === "ADD_ACCOUNT" &&
+        existingAccount &&
+        existingAccount.userId !== loginSession.userId
+      ) {
+        throw new ConflictException(
+          "This Microsoft Outlook account is already connected to another SenderWho profile.",
+        );
+      }
+
+      if (loginSession.purpose === "REAUTH") {
+        if (!loginSession.userId || !loginSession.appSessionId) {
+          throw new UnauthorizedException(
+            "Microsoft reauthentication is not bound to an app session.",
+          );
+        }
+        const [user, currentSession] = await Promise.all([
+          this.prisma.user.findFirst({
+            where: {
+              id: loginSession.userId,
+              microsoftSubject: identity.sub,
+              deletedAt: null,
+            },
+            select: { id: true },
+          }),
+          this.prisma.appSession.findFirst({
+            where: {
+              id: loginSession.appSessionId,
+              userId: loginSession.userId,
+              revokedAt: null,
+              expiresAt: { gt: new Date() },
+            },
+            select: { id: true },
+          }),
+        ]);
+        if (!user || !currentSession) {
+          throw new UnauthorizedException(
+            "Reauthentication must use the Microsoft account that signed in to SenderWho.",
+          );
+        }
+        await this.prisma.oAuthLoginSession.update({
+          where: { id: loginSession.id },
+          data: { status: OAuthLoginStatus.COMPLETED },
+        });
+        return {
+          success: true,
+          provider: "microsoft" as const,
+          emailAddress,
+          emailAccountId: null,
+          persisted: false,
+          reauthenticated: true,
+        };
+      }
+
+      if (!tokens.refresh_token && !existingAccount?.refreshTokenEncrypted) {
+        throw new BadGatewayException(
+          "Microsoft did not return offline access. Remove SenderWho access and connect again.",
+        );
+      }
+      const user =
+        loginSession.purpose === "ADD_ACCOUNT"
+          ? await this.accountConnectionUser(loginSession)
+          : await this.resolveMicrosoftUser(
+              identity.sub,
+              emailAddress,
+              profile.displayName ?? identity.name,
+              existingAccount?.userId,
+            );
+      const tokenContext = microsoftProviderTokenContext(providerAccountId);
+      const credentials = {
+        userId: user.id,
+        providerAccountId,
+        emailAddress,
+        displayName: profile.displayName ?? identity.name,
+        accessTokenEncrypted: this.tokenEncryption.encrypt(
+          tokens.access_token,
+          tokenContext,
+        ),
+        ...(tokens.refresh_token
+          ? {
+              refreshTokenEncrypted: this.tokenEncryption.encrypt(
+                tokens.refresh_token,
+                tokenContext,
+              ),
+            }
+          : {}),
+        tokenExpiresAt: new Date(
+          Date.now() + Math.max(60, tokens.expires_in ?? 3_600) * 1_000,
+        ),
+        scopes,
+        syncStatus: SyncStatus.PENDING,
+        providerSyncState: Prisma.JsonNull,
+        backfillPageToken: null,
+        backfillComplete: false,
+        backfillProcessed: 0,
+        lastSyncError: null,
+      };
+      const account = existingAccount
+        ? await this.prisma.emailAccount.update({
+            where: { id: existingAccount.id },
+            data: credentials,
+          })
+        : await this.prisma.emailAccount.create({
+            data: {
+              ...credentials,
+              provider: EmailProvider.MICROSOFT,
+            },
+          });
+      await this.makeEmailAccountPrimary(user.id, account.id);
+
+      let syncJob:
+        | { jobId?: string; status: "QUEUED" }
+        | { status: "FAILED"; error: string };
+      try {
+        syncJob = await this.inboxJobs.enqueueScan(account.id);
+      } catch {
+        await this.prisma.emailAccount.update({
+          where: { id: account.id },
+          data: {
+            syncStatus: SyncStatus.FAILED,
+            lastSyncError: "The initial Outlook scan could not be queued.",
+          },
+        });
+        syncJob = {
+          status: "FAILED",
+          error:
+            "The initial Outlook scan could not be queued. Retry from the app.",
+        };
+      }
+      await this.prisma.oAuthLoginSession.update({
+        where: { id: loginSession.id },
+        data: { userId: user.id, status: OAuthLoginStatus.COMPLETED },
+      });
+      await this.safeAudit({
+        userId: user.id,
+        action: "email_account.connected",
+        targetType: "EmailAccount",
+        targetId: account.id,
+        metadata: { provider: EmailProvider.MICROSOFT, method: "GRAPH_OAUTH2" },
+      });
+      return {
+        success: true,
+        provider: "microsoft" as const,
+        emailAddress,
+        emailAccountId: account.id,
+        persisted: true,
+        reauthenticated: false,
+        syncJob,
+      };
+    } catch (error) {
+      await this.prisma.oAuthLoginSession.updateMany({
+        where: { id: loginSession.id, status: OAuthLoginStatus.PENDING },
+        data: {
+          status: OAuthLoginStatus.FAILED,
+          error: this.safeErrorMessage(error),
+        },
+      });
+      this.logger.warn(
+        JSON.stringify({
+          event: "oauth.callback.failed",
+          provider: "microsoft",
+          targetId: loginSession.id,
+          errorType:
+            error instanceof Error ? error.constructor.name : "UnknownError",
+        }),
+      );
+      throw error;
+    }
   }
 
   private async handleYahooOAuthCallback(
@@ -1145,10 +1657,54 @@ export class AuthService {
           "Yahoo did not return a verified account identity.",
         );
       }
+      const normalizedEmail = identity.email.trim().toLowerCase();
       if (loginSession.purpose === "REAUTH") {
-        throw new BadRequestException(
-          "Yahoo cannot be used to verify a Google-authenticated session.",
-        );
+        if (
+          !loginSession.userId ||
+          !loginSession.appSessionId ||
+          !identity.sub
+        ) {
+          throw new UnauthorizedException(
+            "Yahoo reauthentication is not bound to an app session.",
+          );
+        }
+        const [user, currentSession] = await Promise.all([
+          this.prisma.user.findFirst({
+            where: {
+              id: loginSession.userId,
+              yahooSubject: identity.sub,
+              email: normalizedEmail,
+              deletedAt: null,
+            },
+            select: { id: true },
+          }),
+          this.prisma.appSession.findFirst({
+            where: {
+              id: loginSession.appSessionId,
+              userId: loginSession.userId,
+              revokedAt: null,
+              expiresAt: { gt: new Date() },
+            },
+            select: { id: true },
+          }),
+        ]);
+        if (!user || !currentSession) {
+          throw new UnauthorizedException(
+            "Reauthentication must use the Yahoo account that signed in to SenderWho.",
+          );
+        }
+        await this.prisma.oAuthLoginSession.update({
+          where: { id: loginSession.id },
+          data: { status: OAuthLoginStatus.COMPLETED },
+        });
+        return {
+          success: true,
+          provider: "yahoo" as const,
+          emailAddress: normalizedEmail,
+          emailAccountId: null,
+          persisted: false,
+          reauthenticated: true,
+        };
       }
       if (!tokens.refresh_token) {
         throw new BadGatewayException(
@@ -1156,7 +1712,6 @@ export class AuthService {
         );
       }
 
-      const normalizedEmail = identity.email.trim().toLowerCase();
       const grantedScopes = (tokens.scope ?? YAHOO_SCOPES.join(" "))
         .split(/[ ,]+/)
         .filter(Boolean);
@@ -1174,36 +1729,61 @@ export class AuthService {
         );
       }
       await this.yahooImap.verifyOAuth(normalizedEmail, tokens.access_token);
-      let user = await this.prisma.user.findFirst({
+      const existingYahooAccount = await this.prisma.emailAccount.findFirst({
         where: {
-          deletedAt: null,
-          OR: [{ yahooSubject: identity.sub }, { email: normalizedEmail }],
+          provider: EmailProvider.YAHOO,
+          OR: [
+            { providerAccountId: identity.sub },
+            { emailAddress: normalizedEmail },
+          ],
         },
+        select: { id: true, userId: true },
       });
-      if (!user) {
-        user = await this.prisma.user.create({
-          data: {
-            email: normalizedEmail,
-            yahooSubject: identity.sub,
-            displayName: identity.name,
-            avatarUrl: identity.picture,
-          },
-        });
+      if (
+        loginSession.purpose === "ADD_ACCOUNT" &&
+        existingYahooAccount &&
+        existingYahooAccount.userId !== loginSession.userId
+      ) {
+        throw new ConflictException(
+          "This Yahoo account is already connected to another SenderWho profile.",
+        );
+      }
+
+      let user;
+      if (loginSession.purpose === "ADD_ACCOUNT") {
+        user = await this.accountConnectionUser(loginSession);
       } else {
-        if (user.yahooSubject && user.yahooSubject !== identity.sub) {
-          throw new UnauthorizedException(
-            "This email address is already linked to a different Yahoo identity.",
-          );
-        }
-        user = await this.prisma.user.update({
-          where: { id: user.id },
-          data: {
-            yahooSubject: identity.sub,
-            email: normalizedEmail,
-            displayName: user.displayName ?? identity.name,
-            avatarUrl: user.avatarUrl ?? identity.picture,
+        user = await this.prisma.user.findFirst({
+          where: {
+            deletedAt: null,
+            OR: [{ yahooSubject: identity.sub }, { email: normalizedEmail }],
           },
         });
+        if (!user) {
+          user = await this.prisma.user.create({
+            data: {
+              email: normalizedEmail,
+              yahooSubject: identity.sub,
+              displayName: identity.name,
+              avatarUrl: identity.picture,
+            },
+          });
+        } else {
+          if (user.yahooSubject && user.yahooSubject !== identity.sub) {
+            throw new UnauthorizedException(
+              "This email address is already linked to a different Yahoo identity.",
+            );
+          }
+          user = await this.prisma.user.update({
+            where: { id: user.id },
+            data: {
+              yahooSubject: identity.sub,
+              email: normalizedEmail,
+              displayName: user.displayName ?? identity.name,
+              avatarUrl: user.avatarUrl ?? identity.picture,
+            },
+          });
+        }
       }
 
       const tokenContext = yahooProviderTokenContext(identity.sub);
@@ -1227,16 +1807,6 @@ export class AuthService {
         syncStatus: SyncStatus.PENDING,
         lastSyncError: null,
       };
-      const existingYahooAccount = await this.prisma.emailAccount.findFirst({
-        where: {
-          provider: EmailProvider.YAHOO,
-          OR: [
-            { providerAccountId: identity.sub },
-            { emailAddress: normalizedEmail },
-          ],
-        },
-        select: { id: true },
-      });
       const account = existingYahooAccount
         ? await this.prisma.emailAccount.update({
             where: { id: existingYahooAccount.id },
@@ -1253,6 +1823,7 @@ export class AuthService {
               provider: EmailProvider.YAHOO,
             },
           });
+      await this.makeEmailAccountPrimary(user.id, account.id);
       let syncJob:
         | { jobId?: string; status: "QUEUED" }
         | { status: "FAILED"; error: string };
@@ -1339,6 +1910,184 @@ export class AuthService {
     }
 
     return (await response.json()) as GoogleTokenResponse;
+  }
+
+  private async exchangeMicrosoftCode(
+    code: string,
+    microsoft: {
+      clientId: string;
+      clientSecret: string;
+      callbackUrl: string;
+    },
+    codeVerifier: string,
+  ): Promise<MicrosoftTokenResponse> {
+    const body = new URLSearchParams({
+      code,
+      client_id: microsoft.clientId,
+      client_secret: microsoft.clientSecret,
+      redirect_uri: microsoft.callbackUrl,
+      grant_type: "authorization_code",
+      code_verifier: codeVerifier,
+    });
+    let response: Response;
+    try {
+      response = await fetch(
+        "https://login.microsoftonline.com/common/oauth2/v2.0/token",
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/x-www-form-urlencoded" },
+          body,
+          signal: AbortSignal.timeout(15_000),
+        },
+      );
+    } catch {
+      throw new BadGatewayException("Could not reach Microsoft OAuth.");
+    }
+    if (!response.ok) {
+      let errorCode = "authorization_failed";
+      try {
+        const details = (await response.json()) as MicrosoftTokenResponse;
+        errorCode = details.error?.slice(0, 80) || errorCode;
+      } catch {
+        // Provider diagnostics are intentionally not returned to the client.
+      }
+      throw new BadGatewayException({
+        message: "Microsoft rejected the authorization code.",
+        providerStatus: response.status,
+        providerError: errorCode,
+      });
+    }
+    return (await response.json()) as MicrosoftTokenResponse;
+  }
+
+  private async validateMicrosoftIdToken(
+    idToken: string,
+    expectedAudience: string,
+    expectedNonceHash: string,
+  ): Promise<MicrosoftIdTokenClaims> {
+    const parts = idToken.split(".");
+    if (parts.length !== 3) {
+      throw new UnauthorizedException("Microsoft identity token is invalid.");
+    }
+    let header: { alg?: string; kid?: string };
+    let claims: MicrosoftIdTokenClaims;
+    try {
+      header = JSON.parse(
+        Buffer.from(parts[0], "base64url").toString("utf8"),
+      ) as { alg?: string; kid?: string };
+      claims = JSON.parse(
+        Buffer.from(parts[1], "base64url").toString("utf8"),
+      ) as MicrosoftIdTokenClaims;
+    } catch {
+      throw new UnauthorizedException("Microsoft identity token is invalid.");
+    }
+    if (header.alg !== "RS256" || !header.kid) {
+      throw new UnauthorizedException(
+        "Microsoft identity token uses an unsupported signature.",
+      );
+    }
+
+    let keys: MicrosoftJwk[];
+    try {
+      const response = await fetch(
+        "https://login.microsoftonline.com/common/discovery/v2.0/keys",
+        { signal: AbortSignal.timeout(15_000) },
+      );
+      if (!response.ok) {
+        throw new Error(`Microsoft keys returned ${response.status}`);
+      }
+      const document = (await response.json()) as { keys?: MicrosoftJwk[] };
+      keys = document.keys ?? [];
+    } catch {
+      throw new BadGatewayException(
+        "Could not validate the Microsoft account identity.",
+      );
+    }
+    const jwk = keys.find(
+      (key) =>
+        key.kid === header.kid &&
+        key.kty === "RSA" &&
+        key.n &&
+        key.e &&
+        (!key.alg || key.alg === "RS256"),
+    );
+    if (!jwk) {
+      throw new UnauthorizedException(
+        "Microsoft identity signing key is unavailable.",
+      );
+    }
+    let signatureValid = false;
+    try {
+      const publicKey = createPublicKey({
+        key: jwk as CryptoJsonWebKey,
+        format: "jwk",
+      });
+      signatureValid = verifySignature(
+        "sha256",
+        Buffer.from(`${parts[0]}.${parts[1]}`),
+        publicKey,
+        Buffer.from(parts[2], "base64url"),
+      );
+    } catch {
+      signatureValid = false;
+    }
+
+    const now = Math.floor(Date.now() / 1_000);
+    const audienceMatches = Array.isArray(claims.aud)
+      ? claims.aud.includes(expectedAudience)
+      : claims.aud === expectedAudience;
+    const tenantIdValid = Boolean(
+      claims.tid &&
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
+        claims.tid,
+      ),
+    );
+    const expectedIssuer = tenantIdValid
+      ? `https://login.microsoftonline.com/${claims.tid}/v2.0`
+      : "";
+    if (
+      !signatureValid ||
+      !audienceMatches ||
+      !claims.sub ||
+      !tenantIdValid ||
+      claims.iss !== expectedIssuer ||
+      !claims.nonce ||
+      this.hashToken(claims.nonce) !== expectedNonceHash ||
+      !Number.isFinite(claims.exp) ||
+      claims.exp! < now - OIDC_CLOCK_SKEW_SECONDS ||
+      !Number.isFinite(claims.iat) ||
+      claims.iat! > now + OIDC_CLOCK_SKEW_SECONDS ||
+      claims.iat! < now - 3_600 - OIDC_CLOCK_SKEW_SECONDS
+    ) {
+      throw new UnauthorizedException(
+        "Microsoft identity claims are invalid or expired.",
+      );
+    }
+    return claims;
+  }
+
+  private microsoftEmail(
+    identity: MicrosoftIdTokenClaims,
+    profile: {
+      mail?: string;
+      userPrincipalName?: string;
+    },
+  ) {
+    const candidates = [
+      profile.mail,
+      identity.email,
+      identity.preferred_username,
+      profile.userPrincipalName,
+    ];
+    const email = candidates
+      .map((value) => value?.trim().toLowerCase())
+      .find((value) => value && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value));
+    if (!email) {
+      throw new UnauthorizedException(
+        "Microsoft did not return an email address for this Outlook account.",
+      );
+    }
+    return email;
   }
 
   private async validateYahooIdToken(
@@ -1488,6 +2237,56 @@ export class AuthService {
       );
     }
     return claims;
+  }
+
+  private async resolveMicrosoftUser(
+    microsoftSubject: string,
+    emailAddress: string,
+    displayName?: string,
+    existingUserId?: string,
+  ) {
+    const normalizedEmail = emailAddress.trim().toLowerCase();
+    const user = existingUserId
+      ? await this.prisma.user.findFirst({
+          where: { id: existingUserId, deletedAt: null },
+        })
+      : await this.prisma.user.findFirst({
+          where: {
+            deletedAt: null,
+            OR: [{ microsoftSubject }, { email: normalizedEmail }],
+          },
+        });
+    if (!user) {
+      return this.prisma.user.create({
+        data: {
+          email: normalizedEmail,
+          microsoftSubject,
+          displayName: displayName?.trim() || undefined,
+        },
+      });
+    }
+    if (user.microsoftSubject && user.microsoftSubject !== microsoftSubject) {
+      throw new UnauthorizedException(
+        "This email address is already linked to a different Microsoft identity.",
+      );
+    }
+    const emailOwner = await this.prisma.user.findUnique({
+      where: { email: normalizedEmail },
+      select: { id: true },
+    });
+    if (emailOwner && emailOwner.id !== user.id) {
+      throw new UnauthorizedException(
+        "The Microsoft identity email conflicts with another SenderWho account.",
+      );
+    }
+    return this.prisma.user.update({
+      where: { id: user.id },
+      data: {
+        microsoftSubject,
+        email: normalizedEmail,
+        displayName: user.displayName ?? displayName?.trim() ?? undefined,
+      },
+    });
   }
 
   private async resolveGoogleUser(

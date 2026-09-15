@@ -359,6 +359,7 @@ class ConnectedEmailAccount {
     required this.emailAddress,
     required this.displayName,
     required this.syncStatus,
+    this.isActive = false,
     this.recoveryAction = 'NONE',
     this.lastSyncedAt,
     this.lastSyncError,
@@ -372,6 +373,7 @@ class ConnectedEmailAccount {
   final String emailAddress;
   final String displayName;
   final String syncStatus;
+  final bool isActive;
   final String recoveryAction;
   final DateTime? lastSyncedAt;
   final String? lastSyncError;
@@ -387,6 +389,7 @@ class ConnectedEmailAccount {
       emailAddress: (json['emailAddress'] as String?) ?? '',
       displayName: (json['displayName'] as String?) ?? provider,
       syncStatus: (json['syncStatus'] as String?) ?? 'PENDING',
+      isActive: (json['isActive'] as bool?) ?? false,
       recoveryAction: (json['recoveryAction'] as String?) ?? 'NONE',
       lastSyncedAt: DateTime.tryParse((json['lastSyncedAt'] as String?) ?? ''),
       lastSyncError: switch (json['lastSyncError']) {
@@ -473,6 +476,13 @@ class CleanupJobInfo {
   final int totalMessages;
   final int processedMessages;
   final int failedMessages;
+
+  bool get isCanceled => status == 'CANCELED';
+
+  int get remainingMessages {
+    final remaining = totalMessages - processedMessages - failedMessages;
+    return remaining > 0 ? remaining : 0;
+  }
 
   bool get isFinished =>
       status == 'COMPLETED' || status == 'FAILED' || status == 'CANCELED';
@@ -808,6 +818,27 @@ class AppSettings {
   final int trashEmails;
   final int blockedSenders;
 
+  AppSettings copyWith({
+    int? connectedAccountsCount,
+    bool? notificationsEnabled,
+    String? inboxScanFrequency,
+    String? theme,
+    int? archivedEmails,
+    int? trashEmails,
+    int? blockedSenders,
+  }) {
+    return AppSettings(
+      connectedAccountsCount:
+          connectedAccountsCount ?? this.connectedAccountsCount,
+      notificationsEnabled: notificationsEnabled ?? this.notificationsEnabled,
+      inboxScanFrequency: inboxScanFrequency ?? this.inboxScanFrequency,
+      theme: theme ?? this.theme,
+      archivedEmails: archivedEmails ?? this.archivedEmails,
+      trashEmails: trashEmails ?? this.trashEmails,
+      blockedSenders: blockedSenders ?? this.blockedSenders,
+    );
+  }
+
   factory AppSettings.fromJson(Map<String, dynamic> json) {
     final account = json['account'] as Map<String, dynamic>? ?? {};
     final preferences = json['preferences'] as Map<String, dynamic>? ?? {};
@@ -819,14 +850,33 @@ class AppSettings {
           (account['connectedAccountsCount'] as num?)?.round() ?? 0,
       notificationsEnabled:
           (preferences['notificationsEnabled'] as bool?) ?? true,
-      inboxScanFrequency:
-          (preferences['inboxScanFrequency'] as String?) ?? 'Auto',
-      theme: (preferences['theme'] as String?) ?? 'System',
+      inboxScanFrequency: _normalizedSettingChoice(
+        preferences['inboxScanFrequency'],
+        const ['Auto', 'Hourly', 'Daily', 'Manual'],
+        fallback: 'Auto',
+      ),
+      theme: _normalizedSettingChoice(preferences['theme'], const [
+        'System',
+        'Light',
+        'Dark',
+      ], fallback: 'System'),
       archivedEmails: (emailManagement['archivedEmails'] as num?)?.round() ?? 0,
       trashEmails: (emailManagement['trashEmails'] as num?)?.round() ?? 0,
       blockedSenders: (emailManagement['blockedSenders'] as num?)?.round() ?? 0,
     );
   }
+}
+
+String _normalizedSettingChoice(
+  Object? rawValue,
+  List<String> supportedValues, {
+  required String fallback,
+}) {
+  final normalized = rawValue is String ? rawValue.trim().toLowerCase() : '';
+  for (final value in supportedValues) {
+    if (value.toLowerCase() == normalized) return value;
+  }
+  return fallback;
 }
 
 class PrivacySecuritySummary {
@@ -931,6 +981,58 @@ class EmailItem {
   final String? claimedBrand;
   final String? authenticatedDomain;
   final String? replyToEmail;
+
+  EmailItem copyWith({
+    String? id,
+    String? senderId,
+    String? threadId,
+    String? sender,
+    String? email,
+    String? subject,
+    String? date,
+    String? snippet,
+    String? category,
+    bool? isRead,
+    bool? isArchived,
+    bool? isTrashed,
+    bool? hasAttachments,
+    int? sizeBytes,
+    bool? canUnsubscribe,
+    String? accountEmail,
+    int? identityRiskScore,
+    String? identityRiskLevel,
+    String? identityStatus,
+    List<IdentityEvidence>? identityEvidence,
+    String? claimedBrand,
+    String? authenticatedDomain,
+    String? replyToEmail,
+  }) {
+    return EmailItem(
+      id: id ?? this.id,
+      senderId: senderId ?? this.senderId,
+      threadId: threadId ?? this.threadId,
+      sender: sender ?? this.sender,
+      email: email ?? this.email,
+      subject: subject ?? this.subject,
+      date: date ?? this.date,
+      snippet: snippet ?? this.snippet,
+      category: category ?? this.category,
+      isRead: isRead ?? this.isRead,
+      isArchived: isArchived ?? this.isArchived,
+      isTrashed: isTrashed ?? this.isTrashed,
+      hasAttachments: hasAttachments ?? this.hasAttachments,
+      sizeBytes: sizeBytes ?? this.sizeBytes,
+      canUnsubscribe: canUnsubscribe ?? this.canUnsubscribe,
+      accountEmail: accountEmail ?? this.accountEmail,
+      identityRiskScore: identityRiskScore ?? this.identityRiskScore,
+      identityRiskLevel: identityRiskLevel ?? this.identityRiskLevel,
+      identityStatus: identityStatus ?? this.identityStatus,
+      identityEvidence: identityEvidence ?? this.identityEvidence,
+      claimedBrand: claimedBrand ?? this.claimedBrand,
+      authenticatedDomain: authenticatedDomain ?? this.authenticatedDomain,
+      replyToEmail: replyToEmail ?? this.replyToEmail,
+    );
+  }
 
   factory EmailItem.fromJson(Map<String, dynamic> json) {
     final rawDate = (json['date'] as String?) ?? '';

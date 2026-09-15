@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../models/app_models.dart';
 import '../services/senderwho_repository.dart';
 import '../theme/app_colors.dart';
+import '../utils/email_selection.dart';
 import '../utils/responsive.dart';
 import '../widgets/app_card.dart';
 import '../widgets/app_chips.dart';
@@ -64,7 +65,7 @@ class _EmailsScreenState extends State<EmailsScreen> {
   ];
 
   final _queryController = TextEditingController();
-  final _selectedIds = <String>{};
+  final _selection = EmailSelection();
   final _items = <EmailItem>[];
   bool _initialized = false;
   bool _loading = false;
@@ -157,9 +158,7 @@ class _EmailsScreenState extends State<EmailsScreen> {
       _hasMore = result.hasMore;
       _error = null;
       _inlineLoadError = null;
-      _selectedIds.removeWhere(
-        (id) => !_items.any((message) => message.id == id),
-      );
+      _selection.retain(_items.map((message) => message.id));
     });
   }
 
@@ -181,14 +180,14 @@ class _EmailsScreenState extends State<EmailsScreen> {
   }
 
   Future<void> _applyBulk(String action, {bool? isRead}) async {
-    if (_selectedIds.isEmpty || _acting) return;
+    if (_selection.isEmpty || _acting) return;
     if (action == 'trash') {
       final confirmed = await showDialog<bool>(
         context: context,
         builder: (context) => AlertDialog(
           title: const Text('Move selected emails to Trash?'),
           content: Text(
-            '${_selectedIds.length} email messages will be moved to Trash.',
+            '${_selection.count} email messages will be moved to Trash.',
           ),
           actions: [
             TextButton(
@@ -206,7 +205,7 @@ class _EmailsScreenState extends State<EmailsScreen> {
       if (confirmed != true) return;
     }
 
-    final requestedIds = Set<String>.of(_selectedIds);
+    final requestedIds = Set<String>.of(_selection.ids);
     setState(() => _acting = true);
     final result = await _repository.applyEmailAction(
       action,
@@ -222,12 +221,265 @@ class _EmailsScreenState extends State<EmailsScreen> {
     if (!mounted) return;
     setState(() {
       _acting = false;
-      _selectedIds
-        ..clear()
-        ..addAll(failedIds);
-      _selectionMode = _selectedIds.isNotEmpty;
+      _selection.replaceWith(failedIds);
+      _selectionMode = !_selection.isEmpty;
     });
     _showActionResult(result);
+  }
+
+  String _activeScopeLabel() {
+    final hasQuery = _queryController.text.trim().isNotEmpty;
+    if (_senderId?.isNotEmpty == true) {
+      return hasQuery
+          ? 'all matching search results from ${_title ?? 'this sender'}'
+          : 'all emails from ${_title ?? 'this sender'}';
+    }
+    if (_category?.isNotEmpty == true) {
+      final category = _friendly(_category!).toLowerCase();
+      return hasQuery
+          ? 'all matching $category search results'
+          : 'all $category emails';
+    }
+    if (_cleanupCategory?.isNotEmpty == true) {
+      final category = _friendly(_cleanupCategory!).toLowerCase();
+      return hasQuery
+          ? 'all matching $category search results'
+          : 'all $category emails';
+    }
+    if (hasQuery) return 'all matching search results';
+    final mailbox = _mailboxes[_mailbox] ?? _friendly(_mailbox);
+    return 'all ${mailbox.toLowerCase()} emails';
+  }
+
+  Future<void> _moveAllMatchingToTrash() async {
+    if (_acting || _total == 0 || _mailbox == 'TRASH') return;
+    final scope = _activeScopeLabel();
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Move all matching emails to Trash?'),
+        content: Text(
+          'This will move $_total email message${_total == 1 ? '' : 's'} '
+          '($scope) to Trash. It does not permanently delete them.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton.icon(
+            onPressed: () => Navigator.pop(context, true),
+            style: FilledButton.styleFrom(backgroundColor: AppColors.danger),
+            icon: const Icon(Icons.delete_outline_rounded),
+            label: const Text('Move all to Trash'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+
+    setState(() => _acting = true);
+    final result = await _repository.applyEmailActionToAllMatching(
+      'trash',
+      mailbox: _mailbox,
+      query: _queryController.text,
+      category: _category,
+      cleanupCategory: _cleanupCategory,
+      senderId: _senderId,
+    );
+    if (!mounted) return;
+    await _load(reset: true);
+    if (!mounted) return;
+    setState(() {
+      _acting = false;
+      _selection.clear();
+      _selectionMode = false;
+    });
+    _showActionResult(result, failuresRemainSelected: false);
+  }
+
+  Future<void> _showMailboxActions() async {
+    if (_acting || _total == 0 || _mailbox == 'TRASH') return;
+    final scope = _activeScopeLabel();
+    final moveToTrash = await showModalBottomSheet<bool>(
+      context: context,
+      useSafeArea: true,
+      showDragHandle: true,
+      builder: (sheetContext) => Padding(
+        padding: const EdgeInsets.fromLTRB(20, 0, 20, 20),
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 560),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          'Email actions',
+                          style: Theme.of(sheetContext).textTheme.titleLarge,
+                        ),
+                        const SizedBox(height: 3),
+                        Text(
+                          '$_total matching email${_total == 1 ? '' : 's'}',
+                          style: Theme.of(sheetContext).textTheme.bodyMedium,
+                        ),
+                      ],
+                    ),
+                  ),
+                  IconButton(
+                    tooltip: 'Close email actions',
+                    onPressed: () => Navigator.pop(sheetContext, false),
+                    icon: const Icon(Icons.close_rounded),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 16),
+              Material(
+                color: AppColors.softFill(sheetContext, AppColors.danger),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(16),
+                  side: BorderSide(
+                    color: AppColors.danger.withValues(
+                      alpha: AppColors.isDark(sheetContext) ? 0.3 : 0.18,
+                    ),
+                  ),
+                ),
+                clipBehavior: Clip.antiAlias,
+                child: InkWell(
+                  key: const ValueKey('move-all-matching-to-trash'),
+                  onTap: () => Navigator.pop(sheetContext, true),
+                  child: ConstrainedBox(
+                    constraints: const BoxConstraints(minHeight: 72),
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 14,
+                        vertical: 12,
+                      ),
+                      child: Row(
+                        children: [
+                          Container(
+                            width: 42,
+                            height: 42,
+                            alignment: Alignment.center,
+                            decoration: BoxDecoration(
+                              color: AppColors.danger.withValues(
+                                alpha: AppColors.isDark(sheetContext)
+                                    ? 0.2
+                                    : 0.11,
+                              ),
+                              borderRadius: BorderRadius.circular(13),
+                            ),
+                            child: const Icon(
+                              Icons.delete_outline_rounded,
+                              color: AppColors.danger,
+                              size: 22,
+                            ),
+                          ),
+                          const SizedBox(width: 13),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  'Move all to Trash',
+                                  style: Theme.of(sheetContext)
+                                      .textTheme
+                                      .titleSmall
+                                      ?.copyWith(
+                                        color: AppColors.danger,
+                                        fontWeight: FontWeight.w700,
+                                      ),
+                                ),
+                                const SizedBox(height: 3),
+                                Text(
+                                  '$scope. Messages are not permanently deleted.',
+                                  maxLines: 2,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: Theme.of(
+                                    sheetContext,
+                                  ).textTheme.bodySmall,
+                                ),
+                              ],
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          const Icon(
+                            Icons.chevron_right_rounded,
+                            color: AppColors.danger,
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+    if (!mounted || moveToTrash != true) return;
+    await _moveAllMatchingToTrash();
+  }
+
+  Future<void> _unsubscribeSelectedSenders() async {
+    if (_acting || _selection.isEmpty) return;
+    final senderIds = _items
+        .where((message) => _selection.contains(message.id))
+        .map((message) => message.senderId)
+        .whereType<String>()
+        .where((id) => id.isNotEmpty)
+        .toSet();
+    if (senderIds.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('The selected emails do not identify a sender.'),
+        ),
+      );
+      return;
+    }
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text(
+          'Unsubscribe from ${senderIds.length} sender${senderIds.length == 1 ? '' : 's'}?',
+        ),
+        content: Text(
+          'SenderWho will request that these senders stop future recurring '
+          'email. Your ${_selection.count} selected message'
+          '${_selection.count == 1 ? '' : 's'} will remain in the mailbox.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton.icon(
+            onPressed: () => Navigator.pop(context, true),
+            icon: const Icon(Icons.unsubscribe_rounded),
+            label: const Text('Unsubscribe'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+    setState(() => _acting = true);
+    final result = await _repository.createUnsubscribeJobs(senderIds.toList());
+    if (!mounted) return;
+    setState(() => _acting = false);
+    final message = result == null
+        ? _repository.lastError ?? 'Unsubscribe requests could not be started.'
+        : result.failures.isEmpty
+        ? '${result.jobs.length} unsubscribe request${result.jobs.length == 1 ? '' : 's'} queued.'
+        : '${result.jobs.length} queued; ${result.failures.length} failed. Selected emails were not deleted.';
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(SnackBar(content: Text(message)));
   }
 
   Set<String> _failedSelection(
@@ -246,7 +498,10 @@ class _EmailsScreenState extends State<EmailsScreen> {
     return remaining.isEmpty ? requestedIds : remaining;
   }
 
-  void _showActionResult(MessageActionResult? result) {
+  void _showActionResult(
+    MessageActionResult? result, {
+    bool failuresRemainSelected = true,
+  }) {
     String? firstFailureReason;
     for (final failure in result?.failures ?? const <MessageActionFailure>[]) {
       final reason = failure.reason.trim();
@@ -259,7 +514,8 @@ class _EmailsScreenState extends State<EmailsScreen> {
         ? _repository.lastError ?? 'The email action could not be completed.'
         : result.failed == 0
         ? '${result.processed} email message${result.processed == 1 ? '' : 's'} updated.'
-        : '${result.processed} updated, ${result.failed} failed and remain selected.'
+        : '${result.processed} updated, ${result.failed} failed'
+              '${failuresRemainSelected ? ' and remain selected' : ' and remain in this view'}.'
               '${firstFailureReason == null ? '' : ' $firstFailureReason'}';
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(text)));
   }
@@ -319,249 +575,315 @@ class _EmailsScreenState extends State<EmailsScreen> {
   @override
   Widget build(BuildContext context) {
     final mailboxTitle = _mailboxes[_mailbox] ?? _friendly(_mailbox);
-    return AppPage(
-      bottomNavigationBar: _selectionMode
-          ? _BulkEmailActions(
-              count: _selectedIds.length,
-              busy: _acting,
-              trashView: _mailbox == 'TRASH',
-              archivedView: _mailbox == 'ARCHIVED',
-              onRead: () => _applyBulk('read-state', isRead: true),
-              onUnread: () => _applyBulk('read-state', isRead: false),
-              onArchiveOrUnarchive: () =>
-                  _applyBulk(_mailbox == 'ARCHIVED' ? 'unarchive' : 'archive'),
-              onTrashOrRestore: () =>
-                  _applyBulk(_mailbox == 'TRASH' ? 'restore' : 'trash'),
-            )
-          : null,
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          AppHeader(
-            title: _title ?? mailboxTitle,
-            subtitle: '$_total email message${_total == 1 ? '' : 's'}',
-            showBack: _showBack,
-            action: TextButton(
-              onPressed: _items.isEmpty
-                  ? null
-                  : () => setState(() {
-                      _selectionMode = !_selectionMode;
-                      if (!_selectionMode) _selectedIds.clear();
-                    }),
-              child: Text(_selectionMode ? 'Cancel' : 'Select'),
-            ),
-          ),
-          SizedBox(height: context.gap(18)),
-          SearchBox(
-            hint: 'Search subject, sender or preview',
-            controller: _queryController,
-            onSubmitted: (_) => _load(reset: true),
-            trailing: IconButton(
-              tooltip: 'Filter categories',
-              onPressed: _showCategoryFilter,
-              icon: const Icon(Icons.tune_rounded, size: 20),
-            ),
-          ),
-          const SizedBox(height: 16),
-          SingleChildScrollView(
-            scrollDirection: Axis.horizontal,
-            physics: const BouncingScrollPhysics(),
-            child: Row(
-              children: [
-                for (final entry in _mailboxes.entries) ...[
-                  SelectablePill(
-                    label: entry.value,
-                    selected: _mailbox == entry.key,
-                    onTap: () {
-                      setState(() {
-                        _mailbox = entry.key;
-                        _title = null;
-                        _selectedIds.clear();
-                        _selectionMode = false;
-                      });
-                      _load(reset: true);
-                    },
-                  ),
-                  const SizedBox(width: 8),
-                ],
-              ],
-            ),
-          ),
-          const SizedBox(height: 18),
-          Container(
-            padding: const EdgeInsets.fromLTRB(14, 11, 10, 11),
-            decoration: BoxDecoration(
-              color: AppColors.surface(context),
-              borderRadius: BorderRadius.circular(16),
-              border: Border.all(color: AppColors.borderFor(context)),
-            ),
-            child: Row(
-              children: [
-                Container(
-                  width: 36,
-                  height: 36,
-                  decoration: BoxDecoration(
-                    color: AppColors.softFill(context, AppColors.primary),
-                    borderRadius: BorderRadius.circular(12),
-                  ),
-                  child: Icon(
-                    _mailboxIcon(_mailbox),
-                    size: 19,
-                    color: AppColors.primary,
-                  ),
+    return PopScope(
+      canPop: !_selectionMode,
+      onPopInvokedWithResult: (didPop, _) {
+        if (!didPop && _selectionMode && !_acting) {
+          setState(() {
+            _selectionMode = false;
+            _selection.clear();
+          });
+        }
+      },
+      child: AppPage(
+        bottomNavigationBar: _selectionMode
+            ? _BulkEmailActions(
+                count: _selection.count,
+                busy: _acting,
+                trashView: _mailbox == 'TRASH',
+                archivedView: _mailbox == 'ARCHIVED',
+                onRead: () => _applyBulk('read-state', isRead: true),
+                onUnread: () => _applyBulk('read-state', isRead: false),
+                onArchiveOrUnarchive: () => _applyBulk(
+                  _mailbox == 'ARCHIVED' ? 'unarchive' : 'archive',
                 ),
-                const SizedBox(width: 11),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        mailboxTitle,
-                        style: Theme.of(context).textTheme.titleMedium,
-                      ),
-                      Text(
-                        _category == null
-                            ? 'All categories'
-                            : _friendly(_category!),
-                        style: Theme.of(context).textTheme.bodySmall,
-                      ),
-                    ],
-                  ),
-                ),
-                if (_category != null)
-                  IconButton(
-                    tooltip: 'Clear category filter',
-                    onPressed: () {
-                      setState(() => _category = null);
-                      _load(reset: true);
-                    },
-                    icon: const Icon(Icons.close_rounded, size: 19),
-                  ),
-                IconButton.filledTonal(
-                  tooltip: 'Refresh messages',
-                  onPressed: _loading ? null : () => _load(reset: true),
-                  icon: const Icon(Icons.refresh_rounded, size: 20),
-                ),
-              ],
-            ),
-          ),
-          SizedBox(height: context.gap(16)),
-          if (_loading)
-            const _EmailListSkeleton()
-          else if (_error != null)
-            AppCard(
-              padding: const EdgeInsets.all(24),
-              child: Column(
-                children: [
-                  const _StateIcon(
-                    icon: Icons.cloud_off_rounded,
-                    color: AppColors.danger,
-                  ),
-                  const SizedBox(height: 14),
-                  Text(
-                    'Could not load your mail',
-                    style: Theme.of(context).textTheme.titleMedium,
-                  ),
-                  const SizedBox(height: 6),
-                  Text(_error!, textAlign: TextAlign.center),
-                  const SizedBox(height: 10),
-                  FilledButton.tonalIcon(
-                    onPressed: () => _load(reset: true),
-                    icon: const Icon(Icons.refresh_rounded),
-                    label: const Text('Try again'),
-                  ),
-                ],
+                onUnsubscribe: _unsubscribeSelectedSenders,
+                onTrashOrRestore: () =>
+                    _applyBulk(_mailbox == 'TRASH' ? 'restore' : 'trash'),
+              )
+            : null,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            AppHeader(
+              title: _title ?? mailboxTitle,
+              subtitle: '$_total email message${_total == 1 ? '' : 's'}',
+              showBack: _showBack,
+              action: TextButton(
+                onPressed: _items.isEmpty
+                    ? null
+                    : () => setState(() {
+                        _selectionMode = !_selectionMode;
+                        if (!_selectionMode) _selection.clear();
+                      }),
+                child: Text(_selectionMode ? 'Cancel' : 'Select'),
               ),
-            )
-          else if (_items.isEmpty)
-            AppCard(
-              padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 36),
-              child: Column(
-                children: [
-                  const _StateIcon(
-                    icon: Icons.mark_email_read_outlined,
-                    color: AppColors.success,
-                  ),
-                  const SizedBox(height: 14),
-                  Text(
-                    'Nothing to review',
-                    style: Theme.of(context).textTheme.titleMedium,
-                  ),
-                  const SizedBox(height: 5),
-                  Text(
-                    'No messages match the selected mailbox and filters.',
-                    textAlign: TextAlign.center,
-                    style: Theme.of(context).textTheme.bodyMedium,
-                  ),
-                ],
-              ),
-            )
-          else
-            Column(
-              children: [
-                for (var index = 0; index < _items.length; index++) ...[
-                  _EmailRow(
-                    email: _items[index],
-                    selectionMode: _selectionMode,
-                    selected: _selectedIds.contains(_items[index].id),
-                    onTap: () {
-                      if (_acting) return;
-                      if (_selectionMode) {
-                        setState(() {
-                          final id = _items[index].id;
-                          _selectedIds.contains(id)
-                              ? _selectedIds.remove(id)
-                              : _selectedIds.add(id);
-                        });
-                      } else {
-                        _openEmail(_items[index]);
-                      }
-                    },
-                  ),
-                  if (index != _items.length - 1) const SizedBox(height: 10),
-                ],
-              ],
             ),
-          if (_inlineLoadError != null) ...[
-            const SizedBox(height: 14),
-            AppCard(
-              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+            SizedBox(height: context.gap(18)),
+            SearchBox(
+              hint: 'Search subject, sender or preview',
+              controller: _queryController,
+              onSubmitted: (_) => _load(reset: true),
+              trailing: IconButton(
+                tooltip: 'Filter categories',
+                onPressed: _showCategoryFilter,
+                icon: const Icon(Icons.tune_rounded, size: 20),
+              ),
+            ),
+            const SizedBox(height: 16),
+            SingleChildScrollView(
+              scrollDirection: Axis.horizontal,
+              physics: const BouncingScrollPhysics(),
               child: Row(
                 children: [
-                  const Icon(Icons.cloud_off_rounded, color: AppColors.danger),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: Text(
-                      _inlineLoadError!,
-                      style: Theme.of(context).textTheme.bodySmall,
+                  for (final entry in _mailboxes.entries) ...[
+                    SelectablePill(
+                      label: entry.value,
+                      selected: _mailbox == entry.key,
+                      onTap: () {
+                        setState(() {
+                          _mailbox = entry.key;
+                          _title = null;
+                          _selection.clear();
+                          _selectionMode = false;
+                        });
+                        _load(reset: true);
+                      },
                     ),
-                  ),
-                  TextButton(
-                    onPressed: (_loading || _loadingMore)
-                        ? null
-                        : () => _load(reset: _inlineRetryResets),
-                    child: const Text('Retry'),
-                  ),
+                    const SizedBox(width: 8),
+                  ],
                 ],
               ),
             ),
-          ],
-          if (_hasMore) ...[
-            const SizedBox(height: 16),
-            Center(
-              child: OutlinedButton.icon(
-                onPressed: _loadingMore ? null : () => _load(reset: false),
-                icon: _loadingMore
-                    ? const SizedBox.square(
-                        dimension: 16,
-                        child: CircularProgressIndicator(strokeWidth: 2),
-                      )
-                    : const Icon(Icons.expand_more_rounded),
-                label: Text(_loadingMore ? 'Loading…' : 'Load more'),
+            const SizedBox(height: 18),
+            Container(
+              padding: const EdgeInsets.fromLTRB(14, 11, 10, 11),
+              decoration: BoxDecoration(
+                color: AppColors.surface(context),
+                borderRadius: BorderRadius.circular(16),
+                border: Border.all(color: AppColors.borderFor(context)),
+              ),
+              child: Row(
+                children: [
+                  Container(
+                    width: 36,
+                    height: 36,
+                    decoration: BoxDecoration(
+                      color: AppColors.softFill(context, AppColors.primary),
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: Icon(
+                      _mailboxIcon(_mailbox),
+                      size: 19,
+                      color: AppColors.primary,
+                    ),
+                  ),
+                  const SizedBox(width: 11),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          mailboxTitle,
+                          style: Theme.of(context).textTheme.titleMedium,
+                        ),
+                        Text(
+                          _category == null
+                              ? 'All categories'
+                              : _friendly(_category!),
+                          style: Theme.of(context).textTheme.bodySmall,
+                        ),
+                      ],
+                    ),
+                  ),
+                  if (_category != null)
+                    IconButton(
+                      tooltip: 'Clear category filter',
+                      onPressed: () {
+                        setState(() => _category = null);
+                        _load(reset: true);
+                      },
+                      icon: const Icon(Icons.close_rounded, size: 19),
+                    ),
+                  IconButton.filledTonal(
+                    tooltip: 'Refresh messages',
+                    onPressed: _loading ? null : () => _load(reset: true),
+                    icon: const Icon(Icons.refresh_rounded, size: 20),
+                  ),
+                  if (!_selectionMode && _mailbox != 'TRASH' && _total > 0) ...[
+                    const SizedBox(width: 4),
+                    IconButton.filledTonal(
+                      key: const ValueKey('email-mailbox-actions'),
+                      tooltip: 'More email actions',
+                      onPressed: _acting ? null : _showMailboxActions,
+                      icon: const Icon(Icons.more_horiz_rounded, size: 21),
+                    ),
+                  ],
+                ],
               ),
             ),
+            SizedBox(height: context.gap(16)),
+            if (_selectionMode) ...[
+              Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                children: [
+                  OutlinedButton.icon(
+                    key: const ValueKey('select-all-visible'),
+                    onPressed: _acting
+                        ? null
+                        : () => setState(
+                            () => _selection.selectAll(
+                              _items
+                                  .map((message) => message.id)
+                                  .where((id) => id.isNotEmpty),
+                            ),
+                          ),
+                    icon: const Icon(Icons.select_all_rounded, size: 18),
+                    label: Text('Select all visible (${_items.length})'),
+                  ),
+                  TextButton.icon(
+                    key: const ValueKey('clear-email-selection'),
+                    onPressed: _acting || _selection.isEmpty
+                        ? null
+                        : () => setState(_selection.clear),
+                    icon: const Icon(Icons.deselect_rounded, size: 18),
+                    label: const Text('Clear selection'),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 12),
+            ],
+            if (_loading)
+              const _EmailListSkeleton()
+            else if (_error != null)
+              AppCard(
+                padding: const EdgeInsets.all(24),
+                child: Column(
+                  children: [
+                    const _StateIcon(
+                      icon: Icons.cloud_off_rounded,
+                      color: AppColors.danger,
+                    ),
+                    const SizedBox(height: 14),
+                    Text(
+                      'Could not load your mail',
+                      style: Theme.of(context).textTheme.titleMedium,
+                    ),
+                    const SizedBox(height: 6),
+                    Text(_error!, textAlign: TextAlign.center),
+                    const SizedBox(height: 10),
+                    FilledButton.tonalIcon(
+                      onPressed: () => _load(reset: true),
+                      icon: const Icon(Icons.refresh_rounded),
+                      label: const Text('Try again'),
+                    ),
+                  ],
+                ),
+              )
+            else if (_items.isEmpty)
+              AppCard(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 24,
+                  vertical: 36,
+                ),
+                child: Column(
+                  children: [
+                    const _StateIcon(
+                      icon: Icons.mark_email_read_outlined,
+                      color: AppColors.success,
+                    ),
+                    const SizedBox(height: 14),
+                    Text(
+                      'Nothing to review',
+                      style: Theme.of(context).textTheme.titleMedium,
+                    ),
+                    const SizedBox(height: 5),
+                    Text(
+                      'No messages match the selected mailbox and filters.',
+                      textAlign: TextAlign.center,
+                      style: Theme.of(context).textTheme.bodyMedium,
+                    ),
+                  ],
+                ),
+              )
+            else
+              Column(
+                children: [
+                  for (var index = 0; index < _items.length; index++) ...[
+                    _EmailRow(
+                      email: _items[index],
+                      selectionMode: _selectionMode,
+                      selected: _selection.contains(_items[index].id),
+                      onTap: () {
+                        if (_acting) return;
+                        if (_selectionMode) {
+                          setState(() {
+                            _selection.toggle(_items[index].id);
+                          });
+                        } else {
+                          _openEmail(_items[index]);
+                        }
+                      },
+                      onLongPress: () {
+                        if (_acting) return;
+                        setState(() {
+                          _selectionMode = true;
+                          _selection.selectAll([_items[index].id]);
+                        });
+                      },
+                    ),
+                    if (index != _items.length - 1) const SizedBox(height: 10),
+                  ],
+                ],
+              ),
+            if (_inlineLoadError != null) ...[
+              const SizedBox(height: 14),
+              AppCard(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 16,
+                  vertical: 14,
+                ),
+                child: Row(
+                  children: [
+                    const Icon(
+                      Icons.cloud_off_rounded,
+                      color: AppColors.danger,
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Text(
+                        _inlineLoadError!,
+                        style: Theme.of(context).textTheme.bodySmall,
+                      ),
+                    ),
+                    TextButton(
+                      onPressed: (_loading || _loadingMore)
+                          ? null
+                          : () => _load(reset: _inlineRetryResets),
+                      child: const Text('Retry'),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+            if (_hasMore) ...[
+              const SizedBox(height: 16),
+              Center(
+                child: OutlinedButton.icon(
+                  onPressed: _loadingMore ? null : () => _load(reset: false),
+                  icon: _loadingMore
+                      ? const SizedBox.square(
+                          dimension: 16,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : const Icon(Icons.expand_more_rounded),
+                  label: Text(_loadingMore ? 'Loading…' : 'Load more'),
+                ),
+              ),
+            ],
           ],
-        ],
+        ),
       ),
     );
   }
@@ -573,19 +895,22 @@ class _EmailRow extends StatelessWidget {
     required this.selectionMode,
     required this.selected,
     required this.onTap,
+    required this.onLongPress,
   });
 
   final EmailItem email;
   final bool selectionMode;
   final bool selected;
   final VoidCallback onTap;
+  final VoidCallback onLongPress;
 
   @override
   Widget build(BuildContext context) {
-    final accent = _categoryColor(email.category);
+    final accent = _categoryColor(context, email.category);
     return AppCard(
       key: ValueKey('email-row-${email.id}'),
       onTap: onTap,
+      onLongPress: onLongPress,
       padding: const EdgeInsets.all(14),
       borderColor: selected ? AppColors.primary : null,
       color: selected
@@ -748,6 +1073,7 @@ class _BulkEmailActions extends StatelessWidget {
     required this.onRead,
     required this.onUnread,
     required this.onArchiveOrUnarchive,
+    required this.onUnsubscribe,
     required this.onTrashOrRestore,
   });
 
@@ -758,6 +1084,7 @@ class _BulkEmailActions extends StatelessWidget {
   final VoidCallback onRead;
   final VoidCallback onUnread;
   final VoidCallback onArchiveOrUnarchive;
+  final VoidCallback onUnsubscribe;
   final VoidCallback onTrashOrRestore;
 
   @override
@@ -780,42 +1107,72 @@ class _BulkEmailActions extends StatelessWidget {
                   color: AppColors.softFill(context, AppColors.primary),
                   borderRadius: BorderRadius.circular(999),
                 ),
-                child: Text(
-                  '$count selected',
-                  style: Theme.of(
-                    context,
-                  ).textTheme.labelMedium?.copyWith(color: AppColors.primary),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    if (busy) ...[
+                      const SizedBox.square(
+                        dimension: 13,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      ),
+                      const SizedBox(width: 7),
+                    ],
+                    Text(
+                      busy ? 'Updating $count' : '$count selected',
+                      style: Theme.of(context).textTheme.labelMedium?.copyWith(
+                        color: AppColors.primary,
+                      ),
+                    ),
+                  ],
                 ),
               ),
-              const Spacer(),
-              IconButton(
-                tooltip: 'Mark read',
-                onPressed: busy || count == 0 ? null : onRead,
-                icon: const Icon(Icons.mark_email_read_outlined),
-              ),
-              IconButton(
-                tooltip: 'Mark unread',
-                onPressed: busy || count == 0 ? null : onUnread,
-                icon: const Icon(Icons.mark_email_unread_outlined),
-              ),
-              if (!trashView)
-                IconButton(
-                  tooltip: archivedView ? 'Unarchive' : 'Archive',
-                  onPressed: busy || count == 0 ? null : onArchiveOrUnarchive,
-                  icon: Icon(
-                    archivedView
-                        ? Icons.unarchive_outlined
-                        : Icons.archive_outlined,
+              const SizedBox(width: 8),
+              Expanded(
+                child: SingleChildScrollView(
+                  scrollDirection: Axis.horizontal,
+                  reverse: true,
+                  child: Row(
+                    children: [
+                      IconButton(
+                        tooltip: 'Mark read',
+                        onPressed: busy || count == 0 ? null : onRead,
+                        icon: const Icon(Icons.mark_email_read_outlined),
+                      ),
+                      IconButton(
+                        tooltip: 'Mark unread',
+                        onPressed: busy || count == 0 ? null : onUnread,
+                        icon: const Icon(Icons.mark_email_unread_outlined),
+                      ),
+                      if (!trashView) ...[
+                        IconButton(
+                          tooltip: 'Unsubscribe selected senders',
+                          onPressed: busy || count == 0 ? null : onUnsubscribe,
+                          icon: const Icon(Icons.unsubscribe_rounded),
+                        ),
+                        IconButton(
+                          tooltip: archivedView ? 'Unarchive' : 'Archive',
+                          onPressed: busy || count == 0
+                              ? null
+                              : onArchiveOrUnarchive,
+                          icon: Icon(
+                            archivedView
+                                ? Icons.unarchive_outlined
+                                : Icons.archive_outlined,
+                          ),
+                        ),
+                      ],
+                      IconButton(
+                        tooltip: trashView ? 'Restore' : 'Trash',
+                        onPressed: busy || count == 0 ? null : onTrashOrRestore,
+                        color: trashView ? AppColors.primary : AppColors.danger,
+                        icon: Icon(
+                          trashView
+                              ? Icons.restore_from_trash_outlined
+                              : Icons.delete_outline_rounded,
+                        ),
+                      ),
+                    ],
                   ),
-                ),
-              IconButton(
-                tooltip: trashView ? 'Restore' : 'Trash',
-                onPressed: busy || count == 0 ? null : onTrashOrRestore,
-                color: trashView ? AppColors.primary : AppColors.danger,
-                icon: Icon(
-                  trashView
-                      ? Icons.restore_from_trash_outlined
-                      : Icons.delete_outline_rounded,
                 ),
               ),
             ],
@@ -834,6 +1191,7 @@ class _StateIcon extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final resolvedColor = AppColors.foregroundFor(context, color);
     return Container(
       width: 56,
       height: 56,
@@ -841,7 +1199,7 @@ class _StateIcon extends StatelessWidget {
         color: AppColors.softFill(context, color),
         borderRadius: BorderRadius.circular(18),
       ),
-      child: Icon(icon, color: color, size: 27),
+      child: Icon(icon, color: resolvedColor, size: 27),
     );
   }
 }
@@ -919,17 +1277,17 @@ IconData _mailboxIcon(String mailbox) {
   };
 }
 
-Color _categoryColor(String category) {
+Color _categoryColor(BuildContext context, String category) {
   return switch (category.toUpperCase()) {
-    'PEOPLE' => AppColors.primary,
-    'ORDERS' => AppColors.orange,
-    'FINANCE' => AppColors.success,
-    'NEWSLETTERS' => AppColors.cyan,
-    'PROMOTIONS' => AppColors.indigo,
-    'TRAVEL' => AppColors.warning,
-    'SOCIAL' => const Color(0xFFEC4899),
-    'SPAM' => AppColors.danger,
-    _ => AppColors.muted,
+    'PEOPLE' => Theme.of(context).colorScheme.primary,
+    'ORDERS' => AppColors.foregroundFor(context, AppColors.orange),
+    'FINANCE' => AppColors.foregroundFor(context, AppColors.success),
+    'NEWSLETTERS' => Theme.of(context).colorScheme.tertiary,
+    'PROMOTIONS' => Theme.of(context).colorScheme.secondary,
+    'TRAVEL' => AppColors.foregroundFor(context, AppColors.warning),
+    'SOCIAL' => AppColors.foregroundFor(context, AppColors.social),
+    'SPAM' => Theme.of(context).colorScheme.error,
+    _ => AppColors.mutedFor(context),
   };
 }
 

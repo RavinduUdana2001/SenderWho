@@ -245,12 +245,9 @@ class _SearchFilterScreenState extends State<SearchFilterScreen> {
               SizedBox(height: context.gap(18)),
               AppButton(
                 label: _searching ? 'Searching…' : 'Search email metadata',
+                loading: _searching,
                 onPressed: _searching ? null : () => _applyFilters(),
               ),
-              if (_searching) ...[
-                const SizedBox(height: 18),
-                const Center(child: CircularProgressIndicator()),
-              ],
               if (_searchError case final error?) ...[
                 const SizedBox(height: 18),
                 AppAsyncError(

@@ -208,6 +208,7 @@ class SenderWhoRepository {
     SessionStore? sessionStore,
     Future<bool> Function(Uri uri)? launchExternal,
     bool? previewMode,
+    this.oauthPollInterval = const Duration(seconds: 2),
     this.baseUrl = AppConfig.apiBaseUrl,
   }) : _client = client ?? http.Client(),
        _sessionStore = sessionStore ?? SecureSessionStore(),
@@ -220,12 +221,14 @@ class SenderWhoRepository {
   final SessionStore _sessionStore;
   final Future<bool> Function(Uri uri) _launchExternal;
   final bool previewMode;
+  final Duration oauthPollInterval;
   final String baseUrl;
   String? _accessToken;
   String? _refreshToken;
   String? _userEmail;
   String? _deviceId;
   String? _lastError;
+  AppSettings? _previewSettings;
   Future<bool>? _refreshInFlight;
   Future<bool>? _oauthInFlight;
   int _oauthAttempt = 0;
@@ -243,8 +246,23 @@ class SenderWhoRepository {
     }
   }
 
+  Future<String?> rememberedProvider() async {
+    try {
+      final provider = await _sessionStore.readRememberedProvider();
+      final normalized = provider?.trim().toLowerCase();
+      return switch (normalized) {
+        'google' || 'microsoft' || 'yahoo' => normalized,
+        _ => null,
+      };
+    } on Object {
+      return null;
+    }
+  }
+
   Future<Map<String, bool>> availableAuthProviders() async {
-    if (previewMode) return const {'google': true, 'yahoo': true};
+    if (previewMode) {
+      return const {'google': true, 'microsoft': true, 'yahoo': true};
+    }
     final json = await _requestJson(
       'GET',
       'auth/providers',
@@ -255,7 +273,7 @@ class SenderWhoRepository {
     final providers = json?['providers'];
     _lastError = null;
     if (providers is! Map<String, dynamic>) {
-      return const {'google': true, 'yahoo': false};
+      return const {'google': true, 'microsoft': false, 'yahoo': false};
     }
     bool enabled(String provider, {required bool fallback}) {
       final value = providers[provider];
@@ -266,6 +284,7 @@ class SenderWhoRepository {
 
     return {
       'google': enabled('google', fallback: true),
+      'microsoft': enabled('microsoft', fallback: false),
       'yahoo': enabled('yahoo', fallback: false),
     };
   }
@@ -450,7 +469,7 @@ class SenderWhoRepository {
   }
 
   Future<AppSettings> getSettings() async {
-    if (previewMode) return _fallbackSettings();
+    if (previewMode) return _previewSettings ??= _fallbackSettings();
     final json = await _getRequiredJson('settings');
     return AppSettings.fromJson(json);
   }
@@ -496,6 +515,14 @@ class SenderWhoRepository {
     String? inboxScanFrequency,
     String? theme,
   }) async {
+    if (previewMode) {
+      final current = await getSettings();
+      return _previewSettings = current.copyWith(
+        notificationsEnabled: notificationsEnabled,
+        inboxScanFrequency: inboxScanFrequency,
+        theme: theme,
+      );
+    }
     final body = <String, Object?>{};
     if (notificationsEnabled != null) {
       body['notificationsEnabled'] = notificationsEnabled;
@@ -509,17 +536,32 @@ class SenderWhoRepository {
   }
 
   Future<bool> startOAuth(String provider) async {
-    return _runOAuth(() => _startOAuth(provider, useRememberedLoginHint: true));
+    return _runOAuth(
+      () => _startOAuth(
+        provider,
+        useRememberedLoginHint: provider.toLowerCase() != 'yahoo',
+      ),
+    );
   }
 
   Future<bool> startOAuthWithAccountChooser(String provider) {
     return _runOAuth(() => _startOAuth(provider));
   }
 
+  Future<bool> connectEmailAccount(String provider, {String? loginHint}) =>
+      _runOAuth(
+        () => _startOAuth(
+          provider,
+          startPath: 'auth/connect/${provider.toLowerCase()}/start',
+          authenticatedStart: true,
+          loginHint: loginHint,
+        ),
+      );
+
   Future<bool> reauthenticate() => _runOAuth(
     () => _startOAuth(
       'google',
-      startPath: 'auth/reauth/google/start',
+      startPath: 'auth/reauth/start',
       authenticatedStart: true,
     ),
   );
@@ -545,7 +587,12 @@ class SenderWhoRepository {
     bool useRememberedLoginHint = false,
   }) async {
     final attempt = ++_oauthAttempt;
-    final resolvedLoginHint = useRememberedLoginHint
+    final normalizedProvider = provider.toLowerCase();
+    final savedProvider = useRememberedLoginHint
+        ? await rememberedProvider()
+        : null;
+    final resolvedLoginHint =
+        useRememberedLoginHint && savedProvider == normalizedProvider
         ? await rememberedEmail()
         : loginHint;
     if (attempt != _oauthAttempt) return false;
@@ -561,10 +608,12 @@ class SenderWhoRepository {
     final authorizationUrl = json?['authorizationUrl'] as String?;
     final sessionId = json?['loginSessionId'] as String?;
     final sessionSecret = json?['loginSessionSecret'] as String?;
+    final flowProvider = (json?['provider'] as String?) ?? provider;
     if (authorizationUrl == null ||
         sessionId == null ||
         sessionSecret == null) {
-      _lastError ??= '${_providerName(provider)} sign-in could not be started.';
+      _lastError ??=
+          '${_providerName(flowProvider)} sign-in could not be started.';
       return false;
     }
 
@@ -573,13 +622,13 @@ class SenderWhoRepository {
     final uri = Uri.tryParse(authorizationUrl);
     if (uri == null) {
       _lastError =
-          'The ${_providerName(provider)} authorization address is invalid.';
+          'The ${_providerName(flowProvider)} authorization address is invalid.';
       return false;
     }
     final opened = await _launchExternal(uri);
     if (!opened) {
       _lastError =
-          'Could not open ${_providerName(provider)} sign-in on this device.';
+          'Could not open ${_providerName(flowProvider)} sign-in on this device.';
       return false;
     }
 
@@ -588,7 +637,7 @@ class SenderWhoRepository {
       // This polls only SenderWho's short-lived login session; it does not
       // send repeated authorization requests to Google. A two-second interval
       // also keeps the unauthenticated API traffic comfortably rate-limited.
-      await Future<void>.delayed(const Duration(seconds: 2));
+      await Future<void>.delayed(oauthPollInterval);
       if (attempt != _oauthAttempt) return false;
       final exchange = await _requestJson(
         'POST',
@@ -609,11 +658,11 @@ class SenderWhoRepository {
       if (status == 'FAILED') {
         _lastError =
             (exchange['error'] as String?) ??
-            '${_providerName(provider)} sign-in failed.';
+            '${_providerName(flowProvider)} sign-in failed.';
         return false;
       }
       if (status == 'AUTHENTICATED') {
-        return _acceptSession(exchange);
+        return _acceptSession(exchange, provider: flowProvider);
       }
       if (status == 'REAUTHENTICATED' && authenticatedStart) {
         final accessToken = exchange['accessToken'] as String?;
@@ -626,23 +675,34 @@ class SenderWhoRepository {
         _userEmail = user?['email'] as String? ?? _userEmail;
         return true;
       }
+      if (status == 'ACCOUNT_CONNECTED' && authenticatedStart) {
+        return true;
+      }
       _lastError =
-          '${_providerName(provider)} sign-in returned an unexpected response.';
+          '${_providerName(flowProvider)} sign-in returned an unexpected response.';
       return false;
     }
     if (attempt == _oauthAttempt) {
       _lastError =
-          '${_providerName(provider)} sign-in did not finish. Return to the app and try again.';
+          '${_providerName(flowProvider)} sign-in did not finish. Return to the app and try again.';
     }
     return false;
   }
 
-  String _providerName(String provider) =>
-      provider.toLowerCase() == 'yahoo' ? 'Yahoo' : 'Google';
+  String _providerName(String provider) => switch (provider.toLowerCase()) {
+    'microsoft' => 'Microsoft Outlook',
+    'yahoo' => 'Yahoo Mail',
+    _ => 'Google',
+  };
 
   Future<bool> queueAccountSync(String id) async {
     final json = await _postJson('email-accounts/$id/sync');
     return json != null;
+  }
+
+  Future<bool> activateEmailAccount(String id) async {
+    final json = await _postJson('email-accounts/$id/activate');
+    return json?['isActive'] == true;
   }
 
   Future<DisconnectAccountResult?> disconnectAccount(String id) async {
@@ -686,6 +746,14 @@ class SenderWhoRepository {
     return json == null ? null : CleanupJobInfo.fromJson(json);
   }
 
+  Future<CleanupJobInfo?> cancelCleanupJob(String id) async {
+    if (id.isEmpty) return null;
+    final json = await _postJson(
+      'cleanup/jobs/${Uri.encodeComponent(id)}/cancel',
+    );
+    return json == null ? null : CleanupJobInfo.fromJson(json);
+  }
+
   Future<List<CleanupJobInfo>> getActiveCleanupJobs() async {
     final json = await _getRequiredJson('cleanup/jobs');
     final items = _itemsFrom(json['items']);
@@ -718,6 +786,86 @@ class SenderWhoRepository {
 
   Future<MessageActionResult?> restoreEmails(List<String> messageIds) {
     return applyEmailAction('restore', messageIds);
+  }
+
+  /// Applies an action to the complete, explicitly scoped result set.
+  ///
+  /// Message identifiers are resolved before mutation so provider-side changes
+  /// cannot make pagination skip items. API action calls stay within the
+  /// backend's 1,000-message batch limit.
+  Future<MessageActionResult?> applyEmailActionToAllMatching(
+    String action, {
+    String mailbox = 'INBOX',
+    String? query,
+    String? category,
+    String? cleanupCategory,
+    String? senderId,
+  }) async {
+    const pageSize = 100;
+    final resolvedIds = <String>{};
+    var page = 1;
+    while (true) {
+      final result = await getEmails(
+        page: page,
+        limit: pageSize,
+        mailbox: mailbox,
+        query: query,
+        category: category,
+        cleanupCategory: cleanupCategory,
+        senderId: senderId,
+      );
+      if (result == null) return null;
+      resolvedIds.addAll(
+        result.items.map((message) => message.id).where((id) => id.isNotEmpty),
+      );
+      if (!result.hasMore) break;
+      page += 1;
+    }
+
+    final messageIds = resolvedIds.toList(growable: false);
+    if (messageIds.isEmpty) {
+      return MessageActionResult(
+        action: action,
+        requested: 0,
+        processed: 0,
+        failed: 0,
+      );
+    }
+
+    final processedIds = <String>[];
+    final failures = <MessageActionFailure>[];
+    for (var start = 0; start < messageIds.length; start += 1000) {
+      final end = start + 1000 < messageIds.length
+          ? start + 1000
+          : messageIds.length;
+      final result = await applyEmailAction(
+        action,
+        messageIds.sublist(start, end),
+      );
+      if (result == null) {
+        failures.addAll(
+          messageIds
+              .sublist(start, end)
+              .map(
+                (id) => MessageActionFailure(
+                  messageId: id,
+                  reason: _lastError ?? 'The email action failed.',
+                ),
+              ),
+        );
+        continue;
+      }
+      processedIds.addAll(result.processedIds);
+      failures.addAll(result.failures);
+    }
+    return MessageActionResult(
+      action: action,
+      requested: messageIds.length,
+      processed: processedIds.length,
+      failed: failures.length,
+      processedIds: processedIds,
+      failures: failures,
+    );
   }
 
   Future<MessageActionResult?> setEmailsRead(
@@ -1031,7 +1179,10 @@ class SenderWhoRepository {
     }
   }
 
-  Future<bool> _acceptSession(Map<String, dynamic> json) async {
+  Future<bool> _acceptSession(
+    Map<String, dynamic> json, {
+    String? provider,
+  }) async {
     final accessToken = json['accessToken'] as String?;
     final refreshToken = json['refreshToken'] as String?;
     final user = json['user'] as Map<String, dynamic>?;
@@ -1054,8 +1205,14 @@ class SenderWhoRepository {
     if (email != null && email.isNotEmpty) {
       try {
         await _sessionStore.writeRememberedEmail(email);
+        final normalizedProvider = provider?.trim().toLowerCase();
+        if (normalizedProvider == 'google' ||
+            normalizedProvider == 'microsoft' ||
+            normalizedProvider == 'yahoo') {
+          await _sessionStore.writeRememberedProvider(normalizedProvider!);
+        }
       } on Object catch (error) {
-        debugPrint('Could not remember the account email: $error');
+        debugPrint('Could not remember the account identity: $error');
       }
     }
     authenticationState.value = true;

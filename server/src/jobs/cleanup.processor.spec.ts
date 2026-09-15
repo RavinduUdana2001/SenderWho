@@ -19,7 +19,8 @@ describe("CleanupProcessor retry state", () => {
           failedMessages: 0,
           metadata: { categories: ["SPAM"] },
         }),
-        update: jest.fn().mockResolvedValue({}),
+        findUnique: jest.fn().mockResolvedValue({ status: JobStatus.RUNNING }),
+        updateMany: jest.fn().mockResolvedValue({ count: 1 }),
       },
       cleanupJobItem: {
         updateMany: jest.fn().mockResolvedValue({ count: 0 }),
@@ -49,8 +50,8 @@ describe("CleanupProcessor retry state", () => {
       "Database unavailable",
     );
 
-    expect(prisma.cleanupJob.update).toHaveBeenLastCalledWith({
-      where: { id: "cleanup-1" },
+    expect(prisma.cleanupJob.updateMany).toHaveBeenLastCalledWith({
+      where: { id: "cleanup-1", status: JobStatus.RUNNING },
       data: {
         status: JobStatus.QUEUED,
         completedAt: null,
@@ -65,8 +66,8 @@ describe("CleanupProcessor retry state", () => {
       "Database unavailable",
     );
 
-    expect(prisma.cleanupJob.update).toHaveBeenLastCalledWith({
-      where: { id: "cleanup-1" },
+    expect(prisma.cleanupJob.updateMany).toHaveBeenLastCalledWith({
+      where: { id: "cleanup-1", status: JobStatus.RUNNING },
       data: {
         status: JobStatus.FAILED,
         completedAt: expect.any(Date),
@@ -91,7 +92,7 @@ describe("CleanupProcessor retry state", () => {
           status: JobStatus.RUNNING,
           emailAccount: { syncStatus: "READY" },
         }),
-        update: jest.fn().mockResolvedValue({}),
+        updateMany: jest.fn().mockResolvedValue({ count: 1 }),
       },
       cleanupJobItem: {
         updateMany: jest.fn().mockResolvedValue({ count: 0 }),
@@ -140,12 +141,76 @@ describe("CleanupProcessor retry state", () => {
       processedMessages: 1,
     });
     expect(gmail.trashMessage).toHaveBeenCalledTimes(1);
-    expect(prisma.cleanupJob.update).toHaveBeenLastCalledWith({
-      where: { id: "cleanup-1" },
+    expect(prisma.cleanupJob.updateMany).toHaveBeenLastCalledWith({
+      where: { id: "cleanup-1", status: JobStatus.RUNNING },
       data: expect.objectContaining({
         status: JobStatus.COMPLETED,
         activeKey: null,
       }),
     });
+  });
+
+  it("preserves cancellation when a running worker reaches finalization", async () => {
+    const prisma = {
+      cleanupJob: {
+        findUniqueOrThrow: jest.fn().mockResolvedValue({
+          id: "cleanup-1",
+          userId: "user-1",
+          emailAccountId: "account-1",
+          status: JobStatus.QUEUED,
+          processedMessages: 0,
+          failedMessages: 0,
+          metadata: { categories: ["SPAM"] },
+        }),
+        findUnique: jest.fn().mockResolvedValue({
+          status: JobStatus.CANCELED,
+        }),
+        updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+      },
+      cleanupJobItem: {
+        updateMany: jest.fn().mockResolvedValue({ count: 0 }),
+        findMany: jest.fn().mockResolvedValue([]),
+        count: jest.fn().mockImplementation(({ where }) => {
+          if (where.status === "COMPLETED") return Promise.resolve(2);
+          if (where.status === "SKIPPED") return Promise.resolve(8);
+          return Promise.resolve(0);
+        }),
+      },
+      auditLog: { create: jest.fn() },
+    } as unknown as PrismaService;
+    const tokens = {
+      getAccessToken: jest.fn().mockResolvedValue("access-token"),
+    } as unknown as GoogleTokenService;
+    const gmailSync = {
+      recalculateAccount: jest.fn().mockResolvedValue(undefined),
+      refreshCleanupSuggestions: jest.fn().mockResolvedValue(undefined),
+    } as unknown as GmailSyncService;
+    const processor = new CleanupProcessor(
+      prisma,
+      {} as GmailClient,
+      tokens,
+      gmailSync,
+    );
+    const job = {
+      data: { cleanupJobId: "cleanup-1" },
+      attemptsMade: 0,
+      opts: { attempts: 3 },
+      updateProgress: jest.fn(),
+    } as unknown as ProcessorJob<{ cleanupJobId: string }>;
+
+    await expect(processor.process(job)).resolves.toEqual({
+      status: JobStatus.CANCELED,
+      processedMessages: 2,
+      failedMessages: 0,
+    });
+    expect(prisma.cleanupJob.updateMany).toHaveBeenLastCalledWith({
+      where: { id: "cleanup-1", status: JobStatus.CANCELED },
+      data: expect.objectContaining({
+        processedMessages: 2,
+        failedMessages: 0,
+        activeKey: null,
+      }),
+    });
+    expect(prisma.auditLog.create).not.toHaveBeenCalled();
   });
 });

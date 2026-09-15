@@ -7,6 +7,7 @@ import '../services/senderwho_repository.dart';
 import '../theme/app_colors.dart';
 import '../utils/responsive.dart';
 import '../widgets/app_card.dart';
+import '../widgets/app_animated_progress.dart';
 import '../widgets/app_chips.dart';
 import '../widgets/app_header.dart';
 import '../widgets/app_page.dart';
@@ -118,6 +119,93 @@ class _SenderDetailsScreenState extends State<SenderDetailsScreen> {
     );
   }
 
+  Future<void> _unsubscribeSender(SenderInfo sender) async {
+    if (_mutating) return;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text('Unsubscribe from ${sender.name}?'),
+        content: Text(
+          'SenderWho will ask ${sender.email} to stop future recurring email. '
+          'Existing messages will stay in your mailbox.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton.icon(
+            onPressed: () => Navigator.pop(context, true),
+            icon: const Icon(Icons.unsubscribe_rounded),
+            label: const Text('Unsubscribe'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+    setState(() => _mutating = true);
+    final result = await _repository.createUnsubscribeJob(sender.id);
+    if (!mounted) return;
+    setState(() => _mutating = false);
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          result == null
+              ? _repository.lastError ?? 'Unsubscribe could not be started.'
+              : 'Unsubscribe request queued. Existing messages were not deleted.',
+        ),
+      ),
+    );
+  }
+
+  Future<void> _deleteAllFromSender(SenderInfo sender) async {
+    if (_mutating || sender.totalMessages == 0) return;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Move all emails from this sender to Trash?'),
+        content: Text(
+          'This will move up to ${sender.totalMessages} email message'
+          '${sender.totalMessages == 1 ? '' : 's'} from ${sender.name} '
+          '(${sender.email}) to Trash. It will not block or unsubscribe from '
+          'the sender, and it is not permanent deletion.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton.icon(
+            onPressed: () => Navigator.pop(context, true),
+            style: FilledButton.styleFrom(backgroundColor: AppColors.danger),
+            icon: const Icon(Icons.delete_outline_rounded),
+            label: const Text('Move all to Trash'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+    setState(() => _mutating = true);
+    final result = await _repository.applyEmailActionToAllMatching(
+      'trash',
+      mailbox: 'ALL',
+      senderId: sender.id,
+    );
+    if (!mounted) return;
+    setState(() {
+      _mutating = false;
+      _detailsFuture = _repository.getSenderDetails(sender.id);
+    });
+    final message = result == null
+        ? _repository.lastError ?? 'The emails could not be moved to Trash.'
+        : result.failed == 0
+        ? '${result.processed} email message${result.processed == 1 ? '' : 's'} moved to Trash.'
+        : '${result.processed} moved to Trash; ${result.failed} failed. Try again for the remaining messages.';
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(SnackBar(content: Text(message)));
+  }
+
   @override
   Widget build(BuildContext context) {
     return FutureBuilder<SenderDetails>(
@@ -130,7 +218,7 @@ class _SenderDetailsScreenState extends State<SenderDetailsScreen> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 const AppHeader(title: 'Sender Details', showBack: true),
-                SizedBox(height: context.gap(25)),
+                SizedBox(height: context.gap(16)),
                 if (_detailsFuture == null)
                   const Text('Select a sender to see email message details.')
                 else if (snapshot.hasError)
@@ -171,7 +259,7 @@ class _SenderDetailsScreenState extends State<SenderDetailsScreen> {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               const AppHeader(title: 'Sender Details', showBack: true),
-              SizedBox(height: context.gap(18)),
+              SizedBox(height: context.gap(16)),
               _SenderProfileCard(sender: sender),
               const SizedBox(height: 12),
               _SenderActions(
@@ -181,8 +269,16 @@ class _SenderDetailsScreenState extends State<SenderDetailsScreen> {
                     _updateSender(sender, trusted: !sender.isTrusted),
                 onBlock: () =>
                     _updateSender(sender, blocked: !sender.isBlocked),
+                onUnsubscribe: () => _unsubscribeSender(sender),
+                onDeleteAll: () => _deleteAllFromSender(sender),
               ),
-              SizedBox(height: context.gap(25)),
+              if (_mutating) ...[
+                const SizedBox(height: 10),
+                const LinearProgressIndicator(
+                  borderRadius: BorderRadius.all(Radius.circular(999)),
+                ),
+              ],
+              SizedBox(height: context.gap(22)),
               const SectionTitle(title: 'About this sender'),
               const SizedBox(height: 14),
               AppCard(
@@ -215,7 +311,7 @@ class _SenderDetailsScreenState extends State<SenderDetailsScreen> {
                   ],
                 ),
               ),
-              SizedBox(height: context.gap(25)),
+              SizedBox(height: context.gap(22)),
               SectionTitle(
                 title: 'Messages',
                 actionLabel: 'View all ${sender.totalMessages}',
@@ -317,7 +413,7 @@ class _InfoLine extends StatelessWidget {
               color: AppColors.softFill(context, AppColors.primary),
               borderRadius: BorderRadius.circular(11),
             ),
-            child: Icon(icon, size: 18, color: AppColors.primary),
+            child: Icon(icon, size: 18, color: AppColors.primaryFor(context)),
           ),
           const SizedBox(width: 12),
           Expanded(
@@ -398,13 +494,39 @@ class _SenderProfileCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final score = sender.score.clamp(0, 100);
-    final trustColor = score >= 75
-        ? AppColors.primary
-        : score >= 50
-        ? AppColors.indigo
-        : AppColors.mutedFor(context);
+    final (identityIcon, trustColor, identityLabel, identityDetail) = switch ((
+      sender.identityStatus,
+      sender.identityRiskLevel,
+    )) {
+      ('VERIFIED', _) => (
+        Icons.gpp_good_rounded,
+        AppColors.success,
+        'Sender identity confirmed',
+        'Authentication signals support this sender identity.',
+      ),
+      ('SUSPICIOUS', 'HIGH') => (
+        Icons.warning_rounded,
+        AppColors.danger,
+        'Possible sender mismatch',
+        'High-risk identity signals were detected. Review before trusting.',
+      ),
+      ('SUSPICIOUS', _) => (
+        Icons.warning_amber_rounded,
+        AppColors.warning,
+        'Sender identity needs review',
+        'Some identity signals are inconclusive or do not match.',
+      ),
+      _ => (
+        Icons.help_outline_rounded,
+        AppColors.mutedFor(context),
+        'Unable to verify sender',
+        'Sender identity data is unavailable or inconclusive.',
+      ),
+    };
+    final resolvedTrustColor = AppColors.foregroundFor(context, trustColor);
     return AppCard(
-      padding: const EdgeInsets.all(18),
+      elevated: true,
+      padding: const EdgeInsets.all(16),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -412,8 +534,8 @@ class _SenderProfileCard extends StatelessWidget {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Container(
-                width: 58,
-                height: 58,
+                width: 46,
+                height: 46,
                 alignment: Alignment.center,
                 decoration: BoxDecoration(
                   gradient: const LinearGradient(
@@ -421,12 +543,12 @@ class _SenderProfileCard extends StatelessWidget {
                     end: Alignment.bottomRight,
                     colors: AppColors.brandGradient,
                   ),
-                  borderRadius: BorderRadius.circular(18),
+                  borderRadius: BorderRadius.circular(15),
                   boxShadow: [
                     BoxShadow(
                       color: AppColors.primary.withValues(alpha: 0.2),
-                      blurRadius: 16,
-                      offset: const Offset(0, 7),
+                      blurRadius: 12,
+                      offset: const Offset(0, 5),
                     ),
                   ],
                 ),
@@ -438,7 +560,7 @@ class _SenderProfileCard extends StatelessWidget {
                   ),
                 ),
               ),
-              const SizedBox(width: 14),
+              const SizedBox(width: 12),
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
@@ -450,11 +572,13 @@ class _SenderProfileCard extends StatelessWidget {
                       style: Theme.of(context).textTheme.titleLarge,
                     ),
                     const SizedBox(height: 4),
-                    Text(
-                      sender.email,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: Theme.of(context).textTheme.bodyMedium,
+                    Tooltip(
+                      message: sender.email,
+                      child: SelectableText(
+                        sender.email,
+                        maxLines: 2,
+                        style: Theme.of(context).textTheme.bodyMedium,
+                      ),
                     ),
                     const SizedBox(height: 9),
                     Wrap(
@@ -482,56 +606,66 @@ class _SenderProfileCard extends StatelessWidget {
               ),
             ],
           ),
-          const SizedBox(height: 18),
-          Container(
-            width: double.infinity,
-            padding: const EdgeInsets.all(14),
-            decoration: BoxDecoration(
-              color: AppColors.softFill(context, trustColor),
-              borderRadius: BorderRadius.circular(16),
-              border: Border.all(color: trustColor.withValues(alpha: 0.16)),
-            ),
-            child: Column(
-              children: [
-                Row(
-                  children: [
-                    Icon(Icons.shield_outlined, size: 20, color: trustColor),
-                    const SizedBox(width: 9),
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            'Sender confidence',
-                            style: Theme.of(context).textTheme.labelLarge,
-                          ),
-                          Text(
-                            '${_trustLabel(score)} trust',
-                            style: Theme.of(context).textTheme.bodySmall,
-                          ),
-                        ],
-                      ),
-                    ),
-                    Text(
-                      '$score / 100',
-                      style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                        color: trustColor,
-                        fontWeight: FontWeight.w800,
-                      ),
-                    ),
-                  ],
+          const SizedBox(height: 14),
+          Semantics(
+            label:
+                '$identityLabel. $identityDetail Confidence $score out of 100.',
+            child: Container(
+              width: double.infinity,
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: AppColors.softFill(context, trustColor),
+                borderRadius: BorderRadius.circular(14),
+                border: Border.all(
+                  color: resolvedTrustColor.withValues(alpha: 0.18),
                 ),
-                const SizedBox(height: 10),
-                ClipRRect(
-                  borderRadius: BorderRadius.circular(99),
-                  child: LinearProgressIndicator(
-                    minHeight: 6,
-                    value: score / 100,
-                    color: trustColor,
-                    backgroundColor: AppColors.trackFor(context),
+              ),
+              child: Column(
+                children: [
+                  Row(
+                    children: [
+                      Icon(identityIcon, size: 20, color: resolvedTrustColor),
+                      const SizedBox(width: 9),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              identityLabel,
+                              style: Theme.of(context).textTheme.labelLarge,
+                            ),
+                            Text(
+                              '${_trustLabel(score)} trust',
+                              style: Theme.of(context).textTheme.bodySmall,
+                            ),
+                            Text(
+                              identityDetail,
+                              maxLines: 2,
+                              overflow: TextOverflow.ellipsis,
+                              style: Theme.of(context).textTheme.bodySmall,
+                            ),
+                          ],
+                        ),
+                      ),
+                      AppAnimatedCount(
+                        value: score,
+                        formatter: (value) => '$value / 100',
+                        style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                          color: resolvedTrustColor,
+                          fontWeight: FontWeight.w800,
+                        ),
+                      ),
+                    ],
                   ),
-                ),
-              ],
+                  const SizedBox(height: 10),
+                  AppAnimatedProgressBar(
+                    value: score / 100,
+                    color: resolvedTrustColor,
+                    backgroundColor: AppColors.trackFor(context),
+                    height: 5,
+                  ),
+                ],
+              ),
             ),
           ),
         ],
@@ -546,80 +680,105 @@ class _SenderActions extends StatelessWidget {
     required this.busy,
     required this.onTrust,
     required this.onBlock,
+    required this.onUnsubscribe,
+    required this.onDeleteAll,
   });
 
   final SenderInfo sender;
   final bool busy;
   final VoidCallback onTrust;
   final VoidCallback onBlock;
+  final VoidCallback onUnsubscribe;
+  final VoidCallback onDeleteAll;
 
   @override
   Widget build(BuildContext context) {
-    return LayoutBuilder(
-      builder: (context, constraints) {
-        final trustButton = _SenderActionButton(
-          label: sender.isTrusted ? 'Untrust' : 'Trust sender',
-          icon: sender.isTrusted
-              ? Icons.verified_rounded
-              : Icons.verified_outlined,
-          color: AppColors.primary,
-          onPressed: busy ? null : onTrust,
-        );
-        final blockButton = _SenderActionButton(
-          label: sender.isBlocked ? 'Unblock' : 'Block sender',
-          icon: sender.isBlocked
-              ? Icons.lock_open_rounded
-              : Icons.block_rounded,
-          color: sender.isBlocked ? AppColors.primary : AppColors.danger,
-          onPressed: busy ? null : onBlock,
-        );
-        if (constraints.maxWidth < 330) {
-          return Column(
+    final scheme = Theme.of(context).colorScheme;
+    final warning = AppColors.foregroundFor(context, AppColors.warning);
+    return AppCard(
+      padding: const EdgeInsets.all(10),
+      child: Column(
+        children: [
+          Row(
             children: [
-              SizedBox(width: double.infinity, child: trustButton),
-              const SizedBox(height: 10),
-              SizedBox(width: double.infinity, child: blockButton),
+              Expanded(
+                child: FilledButton.icon(
+                  onPressed: busy ? null : onTrust,
+                  icon: Icon(
+                    sender.isTrusted
+                        ? Icons.verified_rounded
+                        : Icons.verified_outlined,
+                    size: 18,
+                  ),
+                  label: Text(sender.isTrusted ? 'Untrust' : 'Trust sender'),
+                ),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: OutlinedButton.icon(
+                  onPressed: busy ? null : onBlock,
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: sender.isBlocked
+                        ? scheme.primary
+                        : scheme.error,
+                    side: BorderSide(
+                      color: (sender.isBlocked ? scheme.primary : scheme.error)
+                          .withValues(alpha: 0.38),
+                    ),
+                  ),
+                  icon: Icon(
+                    sender.isBlocked
+                        ? Icons.lock_open_rounded
+                        : Icons.block_rounded,
+                    size: 18,
+                  ),
+                  label: Text(sender.isBlocked ? 'Unblock' : 'Block sender'),
+                ),
+              ),
             ],
-          );
-        }
-        return Row(
-          children: [
-            Expanded(child: trustButton),
-            const SizedBox(width: 10),
-            Expanded(child: blockButton),
-          ],
-        );
-      },
-    );
-  }
-}
-
-class _SenderActionButton extends StatelessWidget {
-  const _SenderActionButton({
-    required this.label,
-    required this.icon,
-    required this.color,
-    required this.onPressed,
-  });
-
-  final String label;
-  final IconData icon;
-  final Color color;
-  final VoidCallback? onPressed;
-
-  @override
-  Widget build(BuildContext context) {
-    return FilledButton.tonalIcon(
-      onPressed: onPressed,
-      style: FilledButton.styleFrom(
-        minimumSize: const Size(48, 50),
-        backgroundColor: AppColors.softFill(context, color),
-        foregroundColor: color,
-        disabledBackgroundColor: AppColors.trackFor(context),
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+          ),
+          const SizedBox(height: 4),
+          Divider(
+            height: 1,
+            color: AppColors.borderFor(context).withValues(alpha: 0.62),
+          ),
+          const SizedBox(height: 4),
+          Row(
+            children: [
+              Expanded(
+                child: TextButton.icon(
+                  onPressed: busy ? null : onUnsubscribe,
+                  style: TextButton.styleFrom(
+                    foregroundColor: warning,
+                    padding: const EdgeInsets.symmetric(horizontal: 4),
+                    textStyle: Theme.of(context).textTheme.labelMedium,
+                  ),
+                  icon: const Icon(Icons.unsubscribe_rounded, size: 17),
+                  label: const Text('Unsubscribe'),
+                ),
+              ),
+              Expanded(
+                child: TextButton.icon(
+                  onPressed: busy || sender.totalMessages == 0
+                      ? null
+                      : onDeleteAll,
+                  style: TextButton.styleFrom(
+                    foregroundColor: scheme.error,
+                    padding: const EdgeInsets.symmetric(horizontal: 4),
+                    textStyle: Theme.of(context).textTheme.labelMedium,
+                  ),
+                  icon: const Icon(Icons.delete_outline_rounded, size: 17),
+                  label: const Text(
+                    'Delete all emails',
+                    maxLines: 2,
+                    textAlign: TextAlign.center,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ],
       ),
-      icon: Icon(icon, size: 19),
-      label: Text(label, maxLines: 1, overflow: TextOverflow.ellipsis),
     );
   }
 }

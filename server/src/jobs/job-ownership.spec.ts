@@ -19,6 +19,19 @@ describe("Queued job ownership", () => {
     );
   });
 
+  it("does not cancel cleanup jobs belonging to another user", async () => {
+    const prisma = {
+      cleanupJob: { findFirst: jest.fn().mockResolvedValue(null) },
+    };
+    const queue = { cancel: jest.fn() };
+    const service = new CleanupService(prisma as never, queue as never);
+
+    await expect(
+      service.cancelJob("owner-user", "foreign-job"),
+    ).rejects.toThrow("not found");
+    expect(queue.cancel).not.toHaveBeenCalled();
+  });
+
   it("does not expose unsubscribe jobs belonging to another user", async () => {
     const prisma = {
       mockDataEnabled: false,

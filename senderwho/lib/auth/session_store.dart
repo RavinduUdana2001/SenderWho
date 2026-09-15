@@ -7,6 +7,8 @@ abstract interface class SessionStore {
   Future<void> writeDeviceId(String deviceId);
   Future<String?> readRememberedEmail();
   Future<void> writeRememberedEmail(String email);
+  Future<String?> readRememberedProvider();
+  Future<void> writeRememberedProvider(String provider);
   Future<void> clear();
 }
 
@@ -17,6 +19,7 @@ class SecureSessionStore implements SessionStore {
   static const _refreshTokenKey = 'senderwho_refresh_token';
   static const _deviceIdKey = 'senderwho_device_id';
   static const _rememberedEmailKey = 'senderwho_remembered_email';
+  static const _rememberedProviderKey = 'senderwho_remembered_provider';
   final FlutterSecureStorage _storage;
 
   @override
@@ -42,6 +45,14 @@ class SecureSessionStore implements SessionStore {
       _storage.write(key: _rememberedEmailKey, value: email);
 
   @override
+  Future<String?> readRememberedProvider() =>
+      _storage.read(key: _rememberedProviderKey);
+
+  @override
+  Future<void> writeRememberedProvider(String provider) =>
+      _storage.write(key: _rememberedProviderKey, value: provider);
+
+  @override
   Future<void> clear() => _storage.delete(key: _refreshTokenKey);
 }
 
@@ -49,6 +60,7 @@ class MemorySessionStore implements SessionStore {
   String? refreshToken;
   String? deviceId;
   String? rememberedEmail;
+  String? rememberedProvider;
 
   @override
   Future<String?> readRefreshToken() async => refreshToken;
@@ -72,6 +84,14 @@ class MemorySessionStore implements SessionStore {
   @override
   Future<void> writeRememberedEmail(String email) async {
     rememberedEmail = email;
+  }
+
+  @override
+  Future<String?> readRememberedProvider() async => rememberedProvider;
+
+  @override
+  Future<void> writeRememberedProvider(String provider) async {
+    rememberedProvider = provider;
   }
 
   @override

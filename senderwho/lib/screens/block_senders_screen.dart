@@ -95,6 +95,7 @@ class _BlockSendersScreenState extends State<BlockSendersScreen> {
             AppButton(
               label: _busy ? 'Blocking sender…' : 'Block Sender',
               backgroundColor: AppColors.danger,
+              loading: _busy,
               onPressed: _busy
                   ? null
                   : () async {

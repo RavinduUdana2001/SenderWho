@@ -4,6 +4,9 @@ import { GmailClient } from "./gmail/gmail.client";
 import { GmailSyncService } from "./gmail/gmail-sync.service";
 import { SenderIdentityRiskService } from "./gmail/sender-identity-risk.service";
 import { GoogleTokenService } from "./google-token.service";
+import { MicrosoftGraphClient } from "./microsoft/microsoft-graph.client";
+import { MicrosoftSyncService } from "./microsoft/microsoft-sync.service";
+import { MicrosoftTokenService } from "./microsoft/microsoft-token.service";
 import { YahooImapClient } from "./yahoo/yahoo-imap.client";
 import { YahooSyncService } from "./yahoo/yahoo-sync.service";
 import { YahooTokenService } from "./yahoo/yahoo-token.service";
@@ -15,6 +18,9 @@ import { YahooTokenService } from "./yahoo/yahoo-token.service";
     GmailSyncService,
     SenderIdentityRiskService,
     GoogleTokenService,
+    MicrosoftGraphClient,
+    MicrosoftSyncService,
+    MicrosoftTokenService,
     TokenEncryptionService,
     YahooImapClient,
     YahooSyncService,
@@ -25,6 +31,9 @@ import { YahooTokenService } from "./yahoo/yahoo-token.service";
     GmailSyncService,
     SenderIdentityRiskService,
     GoogleTokenService,
+    MicrosoftGraphClient,
+    MicrosoftSyncService,
+    MicrosoftTokenService,
     TokenEncryptionService,
     YahooImapClient,
     YahooSyncService,

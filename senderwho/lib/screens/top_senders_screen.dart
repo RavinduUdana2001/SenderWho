@@ -86,10 +86,10 @@ class _RankedSenderCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final medalColor = switch (sender.rank) {
-      1 => const Color(0xFFF5B942),
-      2 => const Color(0xFF9AA7BA),
-      3 => const Color(0xFFC98755),
-      _ => AppColors.muted,
+      1 => AppColors.medalGold,
+      2 => AppColors.medalSilver,
+      3 => AppColors.medalBronze,
+      _ => AppColors.mutedFor(context),
     };
     final progress = maximum == 0 ? 0.0 : sender.count / maximum;
     return AppCard(

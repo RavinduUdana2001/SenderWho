@@ -5,6 +5,7 @@ import '../screens/bulk_clean_screen.dart';
 import '../screens/dashboard_screen.dart';
 import '../screens/emails_screen.dart';
 import '../theme/app_colors.dart';
+import '../theme/app_motion.dart';
 
 class AppBottomNavigation extends StatelessWidget {
   const AppBottomNavigation({super.key});
@@ -83,52 +84,49 @@ class AppBottomNavigation extends StatelessWidget {
           top: BorderSide(
             color: AppColors.borderFor(
               context,
-            ).withValues(alpha: isDark ? 0.65 : 0.85),
+            ).withValues(alpha: isDark ? 0.55 : 0.45),
           ),
         ),
         boxShadow: [
           BoxShadow(
             color: AppColors.shadowFor(context),
-            blurRadius: 20,
-            offset: const Offset(0, -6),
+            blurRadius: 18,
+            offset: const Offset(0, -5),
           ),
         ],
       ),
       child: SafeArea(
         top: false,
-        minimum: const EdgeInsets.only(bottom: 4),
         child: MediaQuery.withClampedTextScaling(
           maxScaleFactor: 1.2,
-          child: SizedBox(
-            height: 64,
-            child: Row(
-              children: [
-                for (var index = 0; index < _destinations.length; index++)
-                  Expanded(
-                    child: _NavigationItem(
-                      label: _destinations[index].label,
-                      icon: _destinations[index].icon,
-                      selectedIcon: _destinations[index].selectedIcon,
-                      selected: selectedIndex == index,
-                      onTap: () {
-                        final destination = _destinations[index];
-                        if (currentRoute == destination.route) return;
-                        Navigator.of(context).pushAndRemoveUntil(
-                          PageRouteBuilder<void>(
-                            settings: RouteSettings(name: destination.route),
-                            transitionDuration: Duration.zero,
-                            reverseTransitionDuration: Duration.zero,
-                            pageBuilder:
-                                (context, animation, secondaryAnimation) =>
-                                    _pageFor(destination.route),
-                          ),
-                          (_) => false,
-                        );
-                      },
-                    ),
+          child: NavigationBar(
+            selectedIndex: selectedIndex,
+            labelBehavior: NavigationDestinationLabelBehavior.alwaysShow,
+            onDestinationSelected: (index) {
+              final destination = _destinations[index];
+              if (currentRoute == destination.route) return;
+              Navigator.of(context).pushAndRemoveUntil(
+                PageRouteBuilder<void>(
+                  settings: RouteSettings(name: destination.route),
+                  transitionDuration: Duration.zero,
+                  reverseTransitionDuration: Duration.zero,
+                  pageBuilder: (context, animation, secondaryAnimation) =>
+                      _pageFor(destination.route),
+                ),
+                (_) => false,
+              );
+            },
+            destinations: [
+              for (final destination in _destinations)
+                NavigationDestination(
+                  icon: Icon(destination.icon),
+                  selectedIcon: _SelectedDestinationIcon(
+                    icon: destination.selectedIcon,
                   ),
-              ],
-            ),
+                  label: destination.label,
+                  tooltip: destination.label,
+                ),
+            ],
           ),
         ),
       ),
@@ -136,73 +134,20 @@ class AppBottomNavigation extends StatelessWidget {
   }
 }
 
-class _NavigationItem extends StatelessWidget {
-  const _NavigationItem({
-    required this.label,
-    required this.icon,
-    required this.selectedIcon,
-    required this.selected,
-    required this.onTap,
-  });
+class _SelectedDestinationIcon extends StatelessWidget {
+  const _SelectedDestinationIcon({required this.icon});
 
-  final String label;
   final IconData icon;
-  final IconData selectedIcon;
-  final bool selected;
-  final VoidCallback onTap;
 
   @override
   Widget build(BuildContext context) {
-    final muted = AppColors.mutedFor(context);
-    return Semantics(
-      button: true,
-      selected: selected,
-      label: label,
-      child: InkResponse(
-        onTap: onTap,
-        radius: 34,
-        highlightShape: BoxShape.rectangle,
-        containedInkWell: true,
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 6),
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              AnimatedContainer(
-                duration: const Duration(milliseconds: 180),
-                curve: Curves.easeOutCubic,
-                width: 42,
-                height: 30,
-                alignment: Alignment.center,
-                decoration: BoxDecoration(
-                  color: selected
-                      ? AppColors.softFill(context, AppColors.primary)
-                      : Colors.transparent,
-                  borderRadius: BorderRadius.circular(12),
-                ),
-                child: Icon(
-                  selected ? selectedIcon : icon,
-                  size: 21,
-                  color: selected ? AppColors.primary : muted,
-                ),
-              ),
-              const SizedBox(height: 2),
-              Text(
-                label,
-                maxLines: 1,
-                overflow: TextOverflow.fade,
-                softWrap: false,
-                style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                  color: selected ? AppColors.primary : muted,
-                  fontSize: 10.5,
-                  height: 1.1,
-                  fontWeight: selected ? FontWeight.w800 : FontWeight.w600,
-                ),
-              ),
-            ],
-          ),
-        ),
-      ),
+    return TweenAnimationBuilder<double>(
+      tween: Tween(begin: 0.84, end: 1),
+      duration: AppMotion.responsive(context, AppMotion.fast),
+      curve: AppMotion.enter,
+      child: Icon(icon),
+      builder: (context, scale, child) =>
+          Transform.scale(scale: scale, child: child),
     );
   }
 }

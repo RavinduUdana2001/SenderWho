@@ -25,21 +25,20 @@ class SectionTitle extends StatelessWidget {
             overflow: TextOverflow.ellipsis,
             style: Theme.of(context).textTheme.titleMedium?.copyWith(
               fontWeight: FontWeight.w800,
-              color: AppColors.mutedFor(context),
+              color: AppColors.textFor(context),
               letterSpacing: 0,
             ),
           ),
         ),
         if (actionLabel != null)
-          GestureDetector(
-            onTap: onAction,
-            child: Text(
-              actionLabel!,
-              style: Theme.of(context).textTheme.labelLarge?.copyWith(
-                fontWeight: FontWeight.w700,
-                color: AppColors.primary,
-              ),
+          TextButton(
+            onPressed: onAction,
+            style: TextButton.styleFrom(
+              minimumSize: const Size(44, 40),
+              padding: const EdgeInsets.symmetric(horizontal: 8),
+              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
             ),
+            child: Text(actionLabel!),
           ),
       ],
     );

@@ -1,9 +1,45 @@
 import 'package:flutter/material.dart';
 
-import '../theme/app_colors.dart';
+import '../theme/app_semantic_colors.dart';
 import '../utils/user_friendly_error.dart';
 import 'app_card.dart';
 import 'icon_bubble.dart';
+
+class AppAsyncLoading extends StatelessWidget {
+  const AppAsyncLoading({
+    super.key,
+    this.message = 'Loading your SenderWho data…',
+  });
+
+  final String message;
+
+  @override
+  Widget build(BuildContext context) {
+    return Semantics(
+      liveRegion: true,
+      label: message,
+      child: AppCard(
+        padding: const EdgeInsets.all(20),
+        child: Row(
+          children: [
+            const SizedBox(
+              width: 24,
+              height: 24,
+              child: CircularProgressIndicator(strokeWidth: 2.5),
+            ),
+            const SizedBox(width: 16),
+            Expanded(
+              child: Text(
+                message,
+                style: Theme.of(context).textTheme.bodyMedium,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
 
 class AppAsyncError extends StatelessWidget {
   const AppAsyncError({
@@ -19,26 +55,33 @@ class AppAsyncError extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final semantic = AppSemanticColors.of(context);
     return AppCard(
       padding: const EdgeInsets.all(20),
-      borderColor: AppColors.warning.withValues(alpha: 0.28),
+      color: semantic.warningContainer,
+      borderColor: semantic.warning.withValues(alpha: 0.42),
       child: Column(
         children: [
-          const IconBubble(
+          IconBubble(
             icon: Icons.cloud_off_rounded,
-            color: AppColors.warning,
+            color: semantic.warning,
+            backgroundColor: semantic.onWarning,
           ),
           const SizedBox(height: 12),
           Text(
             title,
             textAlign: TextAlign.center,
-            style: Theme.of(context).textTheme.titleMedium,
+            style: Theme.of(context).textTheme.titleMedium?.copyWith(
+              color: semantic.onWarningContainer,
+            ),
           ),
           const SizedBox(height: 6),
           Text(
             message,
             textAlign: TextAlign.center,
-            style: Theme.of(context).textTheme.bodyMedium,
+            style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+              color: semantic.onWarningContainer,
+            ),
           ),
           const SizedBox(height: 14),
           OutlinedButton.icon(

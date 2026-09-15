@@ -11,16 +11,22 @@
    `DB_PASSWORD`, and `DB_NAME`, plus `DB_CONNECTION_LIMIT=5`. Copy the
    remaining keys from `.env.hostinger-shared.example` into hPanel Environment
    Variables. Set `PUBLIC_LEGAL_NAME` to the owner/company name and
-   `PUBLIC_SUPPORT_EMAIL` to a real monitored address. Replace every
-   placeholder and do not set `PORT` manually.
+   `PUBLIC_SUPPORT_EMAIL=senderwho.app@gmail.com` and
+   `PUBLIC_LEGAL_EFFECTIVE_DATE=2026-08-01`. Replace every placeholder and do
+   not set `PORT` manually.
 6. Connect `senderwho.com` in the application dashboard and wait for SSL.
 7. Add the exact Google OAuth redirect URI
    `https://senderwho.com/api/v1/auth/oauth/google/callback`.
-8. Leave `YAHOO_OAUTH_ENABLED=false` until Yahoo has approved `mail-r` and
+8. In the Microsoft Entra app, add the **Web** redirect URI
+   `https://senderwho.com/api/v1/auth/oauth/microsoft/callback`. Add the client
+   ID and client-secret **Value** to hPanel. Keep
+   `MICROSOFT_OAUTH_ENABLED=false` until the new backend is healthy, then set it
+   to `true` and restart.
+9. Leave `YAHOO_OAUTH_ENABLED=false` until Yahoo has approved `mail-r` and
    `mail-w`. This keeps Yahoo hidden without affecting Gmail. After approval,
    add the Yahoo Client ID, rotated Client Secret, exact callback URL, and set
    the flag to `true`.
-9. Redeploy, then verify `/`, `/privacy`, `/terms`, `/support`,
+10. Redeploy, then verify `/`, `/privacy`, `/terms`, `/support`,
    `/delete-account`, `/api/v1/health/live`, `/api/v1/health/ready`, and
    `/api/v1/auth/providers`.
 
