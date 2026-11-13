@@ -1,0 +1,129 @@
+SenderWho - CASA Configuration Evidence
+Prepared: 12 October 2026
+Scope confirmed by developer: Android/iOS mobile application and backend only;
+the Flutter web application is not included in this assessment.
+Basis: current source and supplied deployment configuration review. This is not
+a dependency vulnerability scan, DNS export, production log sample or DAST report.
+
+6.1.1 - Dependency evidence status
+
+The repository has backend package.json/package-lock.json, Flutter
+pubspec.yaml/pubspec.lock, iOS Podfile.lock, a backend CycloneDX SBOM, and a CI
+workflow with npm audit and Trivy checks. These identify dependencies or configure
+checks; they do not themselves prove that current deployed versions are free of
+known exploitable vulnerabilities. A current report covering the backend,
+Flutter dependencies and relevant third-party/native components is required.
+The assessor should confirm the accepted tool and scope. The existing backend
+SBOM is inventory evidence, not a vulnerability-scan result.
+
+6.2.1 - Production debug settings
+
+Production validation rejects MOCK_DATA_ENABLED=true and SWAGGER_ENABLED=true.
+The supplied production Docker configuration sets NODE_ENV=production and runs
+the compiled backend. Flutter preview mode is restricted to debug builds.
+Actual deployed debug settings and the assessed release need separate evidence;
+DAST results have not been reviewed for this requirement.
+
+6.3.1 - Origin and authentication
+
+The backend authenticates protected requests by verifying a bearer JWT and its
+backing active database session. Resource access is based on the verified user
+and ownership. Origin is used in CORS configuration, not to grant a user identity
+or ownership permission. Actual deployed behavior requires DAST verification.
+
+6.4.1 - DNS evidence status
+
+DNS records and hosting/provider resource assignments are not represented
+completely by the application source. A current DNS-zone export or screenshots
+for senderwho.com and its in-scope subdomains are required. A/AAAA records and
+CNAME destinations must be matched to controlled, active resources; dangling
+third-party resource assignments require review/removal. No assertion that all
+DNS records are safe is made by this document. The SSL Labs grade does not
+establish the absence of dangling DNS records.
+
+6.5.1 - Written logging description
+
+The HTTP security logging interceptor logs request metadata such as method,
+route, status, duration, correlation ID, authenticated user ID, internal database
+session ID and a hashed device identifier. Its log records omit request bodies,
+Authorization headers, refresh/access-token values and query-string values.
+The internal session record ID is not the bearer credential. Callback-failure
+application logs record event, provider, target ID and error type.
+
+No payment-processing flow was found in the reviewed application source;
+payment-process log evidence is proposed as not applicable. Email categorization
+of orders or financial messages is not an application payment-processing flow.
+
+A REAL log sample captured during an actual test login must accompany the
+description. This document does not contain a fabricated or illustrative log
+presented as captured evidence. Login logs from both the application and hosting
+access layer should be reviewed before asserting full compliance.
+
+Remaining verification: the supplied Caddyfile enables access logging without
+explicit redaction of OAuth callback query parameters. Whether that configuration
+is deployed, and whether hosting/edge access logs retain authorization codes or
+other authentication material, has not been verified. Startup diagnostics also
+log raw exception messages/stacks and password metadata (not password values).
+These paths require review before claiming all logging excludes sensitive
+credentials. The structured interceptor is not a global log-redaction filter.
+
+Source references:
+- server/src/common/security/security-logging.interceptor.ts
+- server/src/auth/auth.service.ts: callback failure logging
+- server/src/main.ts: startup diagnostics
+- deploy/hostinger/Caddyfile: hosting access logging
+
+6.6.1 - Browser storage scope
+
+The developer confirms the assessment covers the Android/iOS app and backend,
+not the Flutter web app. Browser-storage logout handling is proposed as not
+applicable to this assessment. The public website and OAuth browser-completion
+page do not store SenderWho app session credentials in browser storage in the
+reviewed code.
+
+For clarity, mobile logout clears in-memory access/refresh tokens and deletes
+the persisted refresh token. It retains the remembered email/provider and device
+identifier for sign-in convenience. The reviewed code therefore must not be
+described as deleting all stored user information. If a browser app is added to
+scope, reassess both its token deletion and retained personal data.
+
+Source references:
+- senderwho/lib/auth/session_store.dart: SecureSessionStore.clear
+- senderwho/lib/services/senderwho_repository.dart: logout and _clearSession
+- server/src/auth/auth.controller.ts: OAuth browser result page
+
+6.7.1 - Written secrets-management description
+
+The backend obtains JWT signing secrets, OAuth client secrets and encryption
+keys from runtime environment/configuration. Those server secret variable values
+are not embedded in the reviewed Flutter client. Repository ignore rules exclude
+local and production environment files; ignore rules alone do not prove secrets
+have never been committed or exposed.
+
+Provider access/refresh credentials and OAuth PKCE verifiers are encrypted using
+AES-256-GCM with a fresh random IV and authenticated context. Encryption keys are
+supplied separately through a versioned runtime key ring and active key ID.
+Provider-token services can re-encrypt records with the active key. App refresh
+tokens are stored as SHA-256 hashes in the database. Access JWTs remain in mobile
+process memory; app refresh tokens use the platform secure-storage package.
+
+Production validation checks required configuration and encryption-key length.
+The supplied VPS deployment instructions prescribe an environment file with
+permissions 600; shared-hosting instructions prescribe backend environment
+variables configured in the hosting console. Actual deployed access permissions,
+operator access, key generation, rotation schedules and storage protections have
+not been independently inspected. No managed secret-manager deployment or
+automatic key-expiration policy is claimed.
+
+Evidence should include source/configuration screenshots and deployment access
+controls. Show variable names and masked values; never include live secret values
+in assessment screenshots.
+
+Source references:
+- server/src/common/config/configuration.ts
+- server/src/common/config/validate-environment.ts
+- server/src/common/security/token-encryption.service.ts
+- server/src/providers/google-token.service.ts
+- server/src/auth/auth.service.ts
+- .gitignore
+- deploy/hostinger/README.md and deploy/hostinger-shared/README.md

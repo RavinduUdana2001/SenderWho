@@ -1,3 +1,4 @@
+import { mailboxScope } from "../common/mailbox-scope";
 import {
   Injectable,
   Logger,
@@ -173,7 +174,7 @@ export class EmailMessagesService {
   async getPromotionEmails(userId: string) {
     const messages = await this.prisma.message.findMany({
       where: {
-        userId,
+        ...mailboxScope(userId),
         isTrashed: false,
         category: { in: ["PROMOTIONS", "NEWSLETTERS"] },
       },
@@ -558,7 +559,7 @@ export class EmailMessagesService {
       }
     })();
     return {
-      userId,
+      ...mailboxScope(userId, query.emailAccountId),
       ...mailbox,
       ...(query.cleanupCategory
         ? {

@@ -352,6 +352,41 @@ class InboxHealthSummary {
   }
 }
 
+class UserProfile {
+  const UserProfile({
+    required this.email,
+    this.id = '',
+    this.displayName,
+    this.avatarUrl,
+  });
+  final String id;
+  final String email;
+  final String? displayName;
+  final String? avatarUrl;
+
+  String get name => displayName?.trim().isNotEmpty == true
+      ? displayName!.trim()
+      : email.split('@').first;
+
+  factory UserProfile.fromJson(Map<String, dynamic> json) {
+    return UserProfile(
+      id: (json['id'] as String?) ?? '',
+      email: (json['email'] as String?)?.trim() ?? '',
+      displayName: json['displayName'] as String?,
+      avatarUrl: _profilePhotoUrl(json['avatarUrl']),
+    );
+  }
+}
+
+String? _profilePhotoUrl(Object? value) {
+  if (value is! String) return null;
+  final photo = value.trim();
+  final uri = Uri.tryParse(photo);
+  return uri?.scheme == 'https' && uri!.host.isNotEmpty && uri.userInfo.isEmpty
+      ? photo
+      : null;
+}
+
 class ConnectedEmailAccount {
   const ConnectedEmailAccount({
     required this.id,
@@ -359,6 +394,7 @@ class ConnectedEmailAccount {
     required this.emailAddress,
     required this.displayName,
     required this.syncStatus,
+    this.avatarUrl,
     this.isActive = false,
     this.recoveryAction = 'NONE',
     this.lastSyncedAt,
@@ -366,6 +402,7 @@ class ConnectedEmailAccount {
     this.syncStartedAt,
     this.backfillComplete = false,
     this.backfillProcessed = 0,
+    this.syncRetryAt,
   });
 
   final String id;
@@ -373,6 +410,7 @@ class ConnectedEmailAccount {
   final String emailAddress;
   final String displayName;
   final String syncStatus;
+  final String? avatarUrl;
   final bool isActive;
   final String recoveryAction;
   final DateTime? lastSyncedAt;
@@ -380,6 +418,31 @@ class ConnectedEmailAccount {
   final DateTime? syncStartedAt;
   final bool backfillComplete;
   final int backfillProcessed;
+  final DateTime? syncRetryAt;
+  bool get hasScheduledRetry => syncRetryAt != null;
+  bool get needsReconnect =>
+      recoveryAction == 'RECONNECT' ||
+      syncStatus == 'DISCONNECTED' ||
+      (syncStatus == 'FAILED' &&
+          !isMailboxRateLimited(lastSyncError) &&
+          (lastSyncError?.toLowerCase().contains('reconnect') ?? false));
+
+  ConnectedEmailAccount copyWith({bool? isActive}) => ConnectedEmailAccount(
+    id: id,
+    provider: provider,
+    emailAddress: emailAddress,
+    displayName: displayName,
+    syncStatus: syncStatus,
+    avatarUrl: avatarUrl,
+    isActive: isActive ?? this.isActive,
+    recoveryAction: recoveryAction,
+    lastSyncedAt: lastSyncedAt,
+    lastSyncError: lastSyncError,
+    syncStartedAt: syncStartedAt,
+    backfillComplete: backfillComplete,
+    backfillProcessed: backfillProcessed,
+    syncRetryAt: syncRetryAt,
+  );
 
   factory ConnectedEmailAccount.fromJson(Map<String, dynamic> json) {
     final provider = (json['provider'] as String?) ?? 'GOOGLE';
@@ -389,16 +452,14 @@ class ConnectedEmailAccount {
       emailAddress: (json['emailAddress'] as String?) ?? '',
       displayName: (json['displayName'] as String?) ?? provider,
       syncStatus: (json['syncStatus'] as String?) ?? 'PENDING',
+      avatarUrl: _profilePhotoUrl(json['avatarUrl']),
       isActive: (json['isActive'] as bool?) ?? false,
       recoveryAction: (json['recoveryAction'] as String?) ?? 'NONE',
       lastSyncedAt: DateTime.tryParse((json['lastSyncedAt'] as String?) ?? ''),
       lastSyncError: switch (json['lastSyncError']) {
-        final String message when message.trim().isNotEmpty =>
-          sanitizeUserMessage(
-            message,
-            fallback:
-                'Email syncing needs attention. Reconnect the account or try again.',
-          ),
+        final String message when message.trim().isNotEmpty => mailboxSyncError(
+          message,
+        ),
         _ => null,
       },
       syncStartedAt: DateTime.tryParse(
@@ -406,6 +467,7 @@ class ConnectedEmailAccount {
       ),
       backfillComplete: (json['backfillComplete'] as bool?) ?? false,
       backfillProcessed: (json['backfillProcessed'] as num?)?.round() ?? 0,
+      syncRetryAt: DateTime.tryParse((json['syncRetryAt'] as String?) ?? ''),
     );
   }
 }
@@ -526,6 +588,40 @@ class CleanupPreview {
   }
 }
 
+class UnsubscribeCandidatePage {
+  const UnsubscribeCandidatePage({
+    required this.items,
+    required this.jobs,
+    required this.total,
+    required this.page,
+    required this.hasMore,
+  });
+  final List<UnsubscribeCandidate> items;
+  final List<UnsubscribeJobInfo> jobs;
+  final int total, page;
+  final bool hasMore;
+  factory UnsubscribeCandidatePage.fromJson(Map<String, dynamic> json) {
+    final items = (json['items'] as List? ?? [])
+        .whereType<Map>()
+        .map(
+          (item) => UnsubscribeCandidate.fromJson(item.cast<String, dynamic>()),
+        )
+        .toList();
+    return UnsubscribeCandidatePage(
+      items: items,
+      jobs: (json['jobs'] as List? ?? [])
+          .whereType<Map>()
+          .map(
+            (job) => UnsubscribeJobInfo.fromJson(job.cast<String, dynamic>()),
+          )
+          .toList(),
+      total: (json['total'] as num?)?.toInt() ?? items.length,
+      page: (json['page'] as num?)?.toInt() ?? 1,
+      hasMore: json['hasMore'] == true,
+    );
+  }
+}
+
 class UnsubscribeCandidate {
   const UnsubscribeCandidate({
     required this.id,
@@ -548,7 +644,7 @@ class UnsubscribeCandidate {
       email: (json['email'] as String?) ?? '',
       reason: sanitizeUserMessage(
         json['reason'] as String?,
-        fallback: 'This message could not be updated. Please try again.',
+        fallback: 'Unsubscribe details are unavailable.',
       ),
       color: appColorFromKey(json['colorKey'] as String?),
     );
@@ -623,13 +719,12 @@ class UnsubscribeBatchResult {
 }
 
 String _safeUnsubscribeFailureReason(Object? value) {
-  if (value is! String) return '';
-  final normalized = value
-      .replaceAll(RegExp(r'[\x00-\x1F\x7F]'), ' ')
-      .replaceAll(RegExp(r'\s+'), ' ')
-      .trim();
-  if (normalized.length <= 180) return normalized;
-  return '${normalized.substring(0, 177)}...';
+  if (value is! String || value.trim().isEmpty) return '';
+  return sanitizeUserMessage(
+    value,
+    fallback:
+        'The unsubscribe request could not be completed. Please try again.',
+  );
 }
 
 class TopSenderItem {
@@ -1325,11 +1420,17 @@ class CategoryItem {
 }
 
 class NavItem {
-  const NavItem({required this.title, required this.icon, required this.route});
+  const NavItem({
+    required this.title,
+    required this.icon,
+    required this.route,
+    this.arguments,
+  });
 
   final String title;
   final IconData icon;
   final String route;
+  final Object? arguments;
 }
 
 List<String> _stringListFrom(Object? value) {

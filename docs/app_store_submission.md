@@ -54,14 +54,28 @@ social features.
 
 ## 4. Version information
 
-Use the current project version:
+The latest uploaded iOS binary uses:
 
-- Version: `1.1.1`
-- Build: `6`
+- Version: `1.1.3`
+- Build: `12`
 - Copyright: `2026 SenderWho`
 - Support URL: `https://senderwho.com/support`
 - Marketing URL: `https://senderwho.com/`
 - Keywords: `email,inbox,cleanup,unsubscribe,sender,security,organizer,newsletter,productivity`
+
+The iPhone-only **1.1.3 (12)** binary was uploaded through Xcode. Build 11 was
+uploaded before the iPhone-only device-family change.
+
+`senderwho/pubspec.yaml` is now **1.1.4+12**, and the latest signed Android AAB
+was rebuilt with version name **1.1.4** and version code **12**. That local
+version change does not change the already uploaded iOS binary. Before a new
+iOS upload, use an unused build number. Before a Google Play upload, verify
+that version code 12 exceeds every previously uploaded version code across
+all tracks. Store upload history cannot be inferred from the project file.
+
+What's New / Google Play release notes:
+
+> Clearer error messages and account controls, more consistent wording, and improved handling of sign-in confirmation for sensitive actions.
 
 Promotional text:
 
@@ -79,17 +93,24 @@ Description:
 > - Mark messages read or unread, archive, restore, or move them to Trash
 > - Review supported mailing lists and request unsubscribe actions
 > - Trust or block senders and keep those choices synchronized
-> - Export your SenderWho data, disconnect an account, or permanently delete your account
+> - Disconnect a mailbox or permanently delete your SenderWho account
 >
 > SenderWho accesses mail only after you grant permission through your provider. It does not ask for or store your mailbox password. Some unsubscribe requests depend on the sender's own unsubscribe service.
 
 ## 5. Screenshots
 
-The app currently supports iPhone and iPad, so provide both sets:
+This release targets iPhone only (`TARGETED_DEVICE_FAMILY = 1` in Debug,
+Profile, and Release). Select the new build 12 in App Store Connect after it
+has been uploaded and processed. The previously uploaded build 11 still
+declares iPhone and iPad support.
 
-- 6.9-inch iPhone portrait: `1260 x 2736`, `1290 x 2796`, or
-  `1320 x 2868` pixels.
-- 13-inch iPad portrait: `2048 x 2732` or `2064 x 2752` pixels.
+- Required medium Dynamic Island / 6.3-inch iPhone portrait: `1206 x 2622`
+  or `1179 x 2556` pixels.
+- Additional large Dynamic Island / 6.9-inch iPhone portrait: `1260 x 2736`,
+  `1290 x 2796`, or `1320 x 2868` pixels.
+
+iPad screenshots are not needed for the new iPhone-only binary. Do not resize
+iPhone captures into iPad screenshot dimensions.
 
 Use real app screens with test data and do not show real user email, tokens, or
 private messages. Recommended screens are Home, Inbox, All Senders, Inbox
@@ -143,7 +164,7 @@ In Xcode:
 Alternatively, after signing is configured:
 
 ```sh
-flutter build ipa --release --build-name=1.1.1 --build-number=6
+flutter build ipa --release
 ```
 
 Upload the generated IPA with Xcode Organizer or Apple's Transporter app.
@@ -164,12 +185,27 @@ Upload the generated IPA with Xcode Organizer or Apple's Transporter app.
 
 Copy-ready App Review notes:
 
-> SenderWho is a client for the specific third-party email services shown in the app. Users must authorize their own mailbox through the provider's OAuth page; SenderWho never requests or stores the mailbox password. This falls under the client-for-a-specific-third-party-service exception in App Review Guideline 4.8, so Sign in with Apple is not used. To review: launch the app, choose a supported provider, complete OAuth with the review account supplied below, and return to SenderWho. The app then synchronizes that account and enables the visible inbox, sender, cleanup, unsubscribe, trust/block, archive, Trash, and restore features. Account deletion is available in Settings > Privacy & Data > Delete Account. Support: senderwho.app@gmail.com.
+> SenderWho is a client for the specific third-party email services shown in the app. Users must authorize their own mailbox through the provider's OAuth page; SenderWho never requests or stores the mailbox password. This falls under the client-for-a-specific-third-party-service exception in App Review Guideline 4.8, so Sign in with Apple is not used. To review: launch the app, choose a supported provider, complete OAuth with the review account supplied below, and return to SenderWho. The app then synchronizes that account and enables the visible inbox, sender, cleanup, unsubscribe, trust/block, archive, Trash, and restore features. Account deletion is available in Settings > SenderWho account > Delete SenderWho account. Support: senderwho.app@gmail.com.
 
 Supply a dedicated review mailbox and its login details in App Store Connect's
 secure review-information fields. Do not put credentials in public description
 or marketing text. If provider MFA is enabled, provide a stable review method or
 a clearly explained demo path.
+
+For Gmail/Outlook OAuth, the **User name** is the dedicated test mailbox's
+email address and **Password** is that provider account's normal sign-in
+password, not an app-specific password. Apple enters them on Google's or
+Microsoft's authorization page. SenderWho still has no separate password
+login. Use a test mailbox with sample messages and no personal correspondence.
+Keep **Sign-in required** checked. Test access from a fresh browser/device and
+provide a supported review method if the provider requires additional prompts.
+
+Add this instruction to the review notes, choosing the actual test provider:
+
+> The username and password in Sign-In Information belong to a dedicated test mailbox. Select Google for a Gmail mailbox or Microsoft Outlook for an Outlook mailbox, enter those credentials on the provider's sign-in page, authorize SenderWho, and return to the app. SenderWho itself does not request or store the mailbox password.
+
+Apple explicitly asks for the demo provider account details for single-sign-on
+apps: [App Review information](https://developer.apple.com/help/app-store-connect/reference/app-information/platform-version-information#app-review-information).
 
 ## Release gate
 
@@ -179,7 +215,77 @@ Do not submit the production App Store review until all of these are true:
 - Yahoo production access is enabled if Yahoo is advertised in the listing.
 - OAuth redirects return to the installed iOS app.
 - The production API and database are healthy and stay available to reviewers.
-- Account deletion, data export, disconnect, and sign-out work in the uploaded
+- Account deletion, disconnect, and sign-out work in the uploaded
   TestFlight build.
 - No private email, OAuth secret, API key, or test credential appears in the
   binary, screenshots, review notes, or repository.
+
+## Google Play release
+
+Use the same `pubspec.yaml` version and application ID `com.senderwho.app`.
+Configure `senderwho/android/key.properties` with the existing upload key; do
+not generate a replacement key for an already published app.
+
+```sh
+cd senderwho
+flutter analyze
+flutter test
+flutter build appbundle --release
+```
+
+Upload `build/app/outputs/bundle/release/app-release.aab` to an internal test
+track first. Complete Data safety, content rating, app access, and account
+deletion disclosures for the actual production service. The public deletion
+URL is `https://senderwho.com/delete-account`. Advertise only providers enabled
+in production; Yahoo was disabled when checked on November 13, 2026.
+
+As checked on November 13, 2026, Google Play requires API 36 for new phone/tablet
+apps and updates. The installed Flutter SDK supplies compile/target API 36.
+Apple requires Xcode 26 or later with the iOS 26 SDK or later; this machine has
+Xcode 27. Keep these requirements under review before later submissions:
+
+- [Google Play target API requirements](https://developer.android.com/google/play/requirements/target-sdk)
+- [Apple SDK minimum requirements](https://developer.apple.com/news/upcoming-requirements/?id=04282026a)
+
+Local builds and tests do not verify OAuth verification status, store history,
+store disclosures, signing acceptance, or reviewer access. Confirm these in
+the provider/store consoles and test the uploaded builds before submitting.
+
+## Local verification — November 13, 2026
+
+Follow-up after the iPhone-only decision: `flutter build ipa --release` passed
+for **1.1.3 (12)**. Both archive and exported IPA were inspected and contain
+`UIDeviceFamily = [1]`; the IPA contains the code signature. This new IPA is
+at `senderwho/build/ios/ipa/SenderWho.ipa`. Xcode confirmed
+**SenderWho 1.1.3 (12) uploaded** to App Store Connect on November 13, 2026
+at 14:56 local time; Organizer shows **Uploaded to Apple** for build 12.
+Select this build after Apple finishes processing it. It has not been
+submitted for App Review.
+The build 11 results and hashes below record the earlier upload and artifacts.
+
+- `flutter analyze`: no issues.
+- `flutter test`: 292 passed; one debug preview test skipped in normal mode.
+- `flutter build appbundle --release`: passed. Packaged version `1.1.3` / code
+  `11`, target API 36, debugging disabled. JAR signature verified with a
+  non-debug certificate. All three ARM64 native libraries have ELF load-segment
+  alignment of at least 16 KB.
+- `flutter build ios --release --no-codesign`: passed with the iOS 27 SDK.
+- `flutter build ipa --release`: signed archive and App Store Connect IPA export
+  passed. Exported IPA contains version `1.1.3`, build `11`, bundle ID
+  `com.senderwho.app`, and the app privacy manifest. Archive signature verified
+  with macOS certificate trust services.
+- Production privacy, terms, support, deletion, health, and provider endpoints
+  returned HTTP 200. Provider availability: Google and Microsoft enabled;
+  Yahoo disabled. This verifies availability, not a complete OAuth sign-in.
+
+Upload status — November 13, 2026: Xcode Organizer confirmed **SenderWho
+1.1.3 (11) uploaded** to App Store Connect and shows **Uploaded to Apple**.
+Apple processing, TestFlight testing, and App Review submission are separate
+steps. The Android bundle has not been uploaded by this review.
+
+Release artifacts:
+
+- Android: `senderwho/build/app/outputs/bundle/release/app-release.aab`
+  - SHA-256: `58d7d60a3f0248035b617eca24c168422125a8264bab0c4be379678d215f94dc`
+- iOS: `senderwho/build/ios/ipa/SenderWho.ipa`
+  - SHA-256: `d0ee05482e2cde0b0aeac56e0724433f3f44d2b259b91e03e5ac5ad9a8339b66`

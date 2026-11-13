@@ -1,3 +1,4 @@
+import { mailboxScope } from "../common/mailbox-scope";
 import { Injectable, Logger, NotFoundException } from "@nestjs/common";
 import { JobStatus, Prisma } from "@prisma/client";
 import {
@@ -19,9 +20,41 @@ export class SendersService {
 
   async list(userId: string, pagination: ListSendersDto) {
     if (this.prisma.mockDataEnabled) {
+      const query = pagination.query?.trim().toLowerCase();
+      const matching = mockSenders.filter((sender) => {
+        const category =
+          sender.category.toUpperCase() === "MARKETING"
+            ? "PROMOTIONS"
+            : sender.category.toUpperCase();
+        if (pagination.category && category !== pagination.category)
+          return false;
+        if (pagination.kind === SenderKind.PEOPLE && category !== "PEOPLE")
+          return false;
+        if (
+          pagination.kind === SenderKind.NEWSLETTERS &&
+          category !== "NEWSLETTERS"
+        )
+          return false;
+        if (
+          pagination.kind === SenderKind.COMPANIES &&
+          ["PEOPLE", "NEWSLETTERS"].includes(category)
+        )
+          return false;
+        if (pagination.control === SenderControl.BLOCKED && !sender.isBlocked)
+          return false;
+        if (pagination.control === SenderControl.TRUSTED && !sender.isTrusted)
+          return false;
+        return (
+          !query ||
+          `${sender.name} ${sender.email}`.toLowerCase().includes(query)
+        );
+      });
       return {
-        items: mockSenders,
-        total: mockSenders.length,
+        items: matching.slice(
+          pagination.skip,
+          pagination.skip + pagination.limit,
+        ),
+        total: matching.length,
         page: pagination.page,
         limit: pagination.limit,
       };
@@ -41,8 +74,12 @@ export class SendersService {
       }
     })();
     const where: Prisma.SenderWhereInput = {
-      userId,
-      ...kindWhere,
+      ...mailboxScope(userId, pagination.emailAccountId),
+      // Intersect type and category, including companies' category exclusion.
+      AND: [
+        kindWhere,
+        ...(pagination.category ? [{ category: pagination.category }] : []),
+      ],
       ...(pagination.control === SenderControl.BLOCKED
         ? { isBlocked: true }
         : pagination.control === SenderControl.TRUSTED
@@ -112,7 +149,7 @@ export class SendersService {
     }
 
     const senders = await this.prisma.sender.findMany({
-      where: { userId },
+      where: mailboxScope(userId),
       orderBy: { totalMessages: "desc" },
       take: 10,
     });

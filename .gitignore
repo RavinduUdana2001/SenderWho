@@ -60,6 +60,9 @@ server/*.tsbuildinfo
 /*.apk
 /release-archive/
 /release-previews/
+/output/
+/tmp/
+/senderwho/tmp/
 
 # Symbolication related
 app.*.symbols

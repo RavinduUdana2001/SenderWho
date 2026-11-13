@@ -1,13 +1,18 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
 import '../models/app_models.dart';
 import '../services/senderwho_repository.dart';
+import '../services/repository_scope.dart';
 import '../theme/app_colors.dart';
 import '../utils/email_selection.dart';
-import '../utils/responsive.dart';
 import '../widgets/app_card.dart';
-import '../widgets/app_chips.dart';
+import '../widgets/mail_list_surface.dart';
+import '../widgets/mail_message_row.dart';
+import '../widgets/sender_filters_sheet.dart';
 import '../widgets/app_header.dart';
+import '../widgets/mailbox_sync_notice.dart';
 import '../widgets/app_page.dart';
 import '../widgets/search_box.dart';
 import 'email_details_screen.dart';
@@ -51,30 +56,24 @@ class _EmailsScreenState extends State<EmailsScreen> {
     'TRASH': 'Trash',
     'ALL': 'All mail',
   };
-  static const _categories = [
-    'IMPORTANT',
-    'PEOPLE',
-    'ORDERS',
-    'FINANCE',
-    'NEWSLETTERS',
-    'PROMOTIONS',
-    'TRAVEL',
-    'SOCIAL',
-    'SPAM',
-    'UNKNOWN',
-  ];
-
   final _queryController = TextEditingController();
   final _selection = EmailSelection();
   final _items = <EmailItem>[];
   bool _initialized = false;
   bool _loading = false;
   bool _loadingMore = false;
+  bool _reloadPending = false;
+  Timer? _syncRefresh;
+  DashboardSummary? _syncSummary;
+  bool _loadingSyncStatus = false;
+  int _dataGeneration = 0;
   bool _selectionMode = false;
   bool _acting = false;
   bool _showBack = false;
+  bool _showSearch = false;
   String? _error;
   String? _inlineLoadError;
+  String _appliedQuery = '';
   bool _inlineRetryResets = false;
   String _mailbox = 'INBOX';
   String? _category;
@@ -86,7 +85,7 @@ class _EmailsScreenState extends State<EmailsScreen> {
   bool _hasMore = false;
 
   SenderWhoRepository get _repository =>
-      widget.repository ?? senderWhoRepository;
+      widget.repository ?? RepositoryScope.read(context);
 
   @override
   void didChangeDependencies() {
@@ -103,18 +102,27 @@ class _EmailsScreenState extends State<EmailsScreen> {
       _senderId = arguments.senderId;
       _title = arguments.title;
       _queryController.text = arguments.query ?? '';
+      _showSearch = _queryController.text.isNotEmpty;
     }
     _load(reset: true);
   }
 
   @override
   void dispose() {
+    _syncRefresh?.cancel();
     _queryController.dispose();
     super.dispose();
   }
 
   Future<void> _load({required bool reset}) async {
-    if (_loading || _loadingMore) return;
+    reset = reset || _queryController.text.trim() != _appliedQuery;
+    if (_loading || _loadingMore) {
+      if (reset) _reloadPending = true;
+      return;
+    }
+    _syncRefresh?.cancel();
+    if (reset) _appliedQuery = _queryController.text.trim();
+    unawaited(_loadSyncStatus());
     setState(() {
       if (reset) {
         _loading = true;
@@ -125,23 +133,31 @@ class _EmailsScreenState extends State<EmailsScreen> {
         _inlineLoadError = null;
       }
     });
+    if (reset) _dataGeneration++;
     final targetPage = reset ? 1 : _page + 1;
     final result = await _repository.getEmails(
       page: targetPage,
       mailbox: _mailbox,
-      query: _queryController.text,
+      query: _appliedQuery,
       category: _category,
       cleanupCategory: _cleanupCategory,
       senderId: _senderId,
     );
     if (!mounted) return;
+    if (_reloadPending) {
+      _reloadPending = false;
+      _loading = false;
+      _loadingMore = false;
+      unawaited(_load(reset: true));
+      return;
+    }
     setState(() {
       _loading = false;
       _loadingMore = false;
       if (result == null) {
         final message =
             _repository.lastError ??
-            'Could not load email metadata. Check the API and retry.';
+            'Could not load your messages. Please try again.';
         if (_items.isEmpty) {
           _error = message;
         } else {
@@ -160,23 +176,92 @@ class _EmailsScreenState extends State<EmailsScreen> {
       _inlineLoadError = null;
       _selection.retain(_items.map((message) => message.id));
     });
+    _scheduleSyncRefresh();
+  }
+
+  bool get _syncing => const {'PENDING', 'SYNCING', 'PARTIAL'}.contains(
+    _syncSummary?.syncStatus ?? _repository.activeMailbox.value?.syncStatus,
+  );
+
+  Future<void> _loadSyncStatus() async {
+    if (_loadingSyncStatus || !_repository.isAuthenticated) return;
+    _loadingSyncStatus = true;
+    try {
+      final summary = await _repository.getDashboard();
+      if (mounted && summary.available) setState(() => _syncSummary = summary);
+    } on Object {
+      // A status failure must not block the message list.
+    } finally {
+      _loadingSyncStatus = false;
+      if (mounted && !_loading && !_loadingMore) _scheduleSyncRefresh();
+    }
+  }
+
+  void _scheduleSyncRefresh() {
+    _syncRefresh?.cancel();
+    if (_syncing ||
+        (_syncSummary?.syncRetryAt ??
+                _repository.activeMailbox.value?.syncRetryAt) !=
+            null) {
+      _syncRefresh = Timer(
+        const Duration(seconds: 3),
+        () => _load(reset: true),
+      );
+    }
+  }
+
+  Future<void> _refreshLoadedPages() async {
+    final generation = _dataGeneration;
+    final pages = await Future.wait([
+      for (var page = 1; page <= _page; page++)
+        _repository.getEmails(
+          page: page,
+          mailbox: _mailbox,
+          query: _appliedQuery,
+          category: _category,
+          cleanupCategory: _cleanupCategory,
+          senderId: _senderId,
+        ),
+    ]);
+    if (!mounted || generation != _dataGeneration || _loading || _loadingMore) {
+      return;
+    }
+    if (pages.any((page) => page == null)) {
+      setState(() {
+        _inlineLoadError =
+            'Could not refresh messages. Your loaded emails are still available.';
+        _inlineRetryResets = true;
+      });
+      return;
+    }
+    if (pages.isEmpty) return;
+    setState(() {
+      _items
+        ..clear()
+        ..addAll(pages.expand((page) => page!.items));
+      _total = pages.last!.total;
+      _hasMore = pages.last!.hasMore;
+      _selection.retain(_items.map((message) => message.id));
+    });
   }
 
   Future<void> _openEmail(EmailItem email) async {
     if (email.id.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
-          content: Text('This email message is missing its local identifier.'),
+          content: Text(
+            'This message is unavailable. Refresh your inbox and try again.',
+          ),
         ),
       );
       return;
     }
-    final changed = await Navigator.pushNamed<dynamic>(
+    await Navigator.pushNamed<dynamic>(
       context,
       EmailDetailsScreen.routeName,
       arguments: email,
     );
-    if (changed == true) await _load(reset: true);
+    if (mounted) await _refreshLoadedPages();
   }
 
   Future<void> _applyBulk(String action, {bool? isRead}) async {
@@ -185,6 +270,7 @@ class _EmailsScreenState extends State<EmailsScreen> {
       final confirmed = await showDialog<bool>(
         context: context,
         builder: (context) => AlertDialog(
+          scrollable: true,
           title: const Text('Move selected emails to Trash?'),
           content: Text(
             '${_selection.count} email messages will be moved to Trash.',
@@ -196,7 +282,10 @@ class _EmailsScreenState extends State<EmailsScreen> {
             ),
             FilledButton(
               onPressed: () => Navigator.pop(context, true),
-              style: FilledButton.styleFrom(backgroundColor: AppColors.danger),
+              style: FilledButton.styleFrom(
+                backgroundColor: Theme.of(context).colorScheme.error,
+                foregroundColor: Theme.of(context).colorScheme.onError,
+              ),
               child: const Text('Move to Trash'),
             ),
           ],
@@ -228,7 +317,7 @@ class _EmailsScreenState extends State<EmailsScreen> {
   }
 
   String _activeScopeLabel() {
-    final hasQuery = _queryController.text.trim().isNotEmpty;
+    final hasQuery = _appliedQuery.isNotEmpty;
     if (_senderId?.isNotEmpty == true) {
       return hasQuery
           ? 'all matching search results from ${_title ?? 'this sender'}'
@@ -257,6 +346,7 @@ class _EmailsScreenState extends State<EmailsScreen> {
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
+        scrollable: true,
         title: const Text('Move all matching emails to Trash?'),
         content: Text(
           'This will move $_total email message${_total == 1 ? '' : 's'} '
@@ -269,7 +359,10 @@ class _EmailsScreenState extends State<EmailsScreen> {
           ),
           FilledButton.icon(
             onPressed: () => Navigator.pop(context, true),
-            style: FilledButton.styleFrom(backgroundColor: AppColors.danger),
+            style: FilledButton.styleFrom(
+              backgroundColor: Theme.of(context).colorScheme.error,
+              foregroundColor: Theme.of(context).colorScheme.onError,
+            ),
             icon: const Icon(Icons.delete_outline_rounded),
             label: const Text('Move all to Trash'),
           ),
@@ -282,7 +375,7 @@ class _EmailsScreenState extends State<EmailsScreen> {
     final result = await _repository.applyEmailActionToAllMatching(
       'trash',
       mailbox: _mailbox,
-      query: _queryController.text,
+      query: _appliedQuery,
       category: _category,
       cleanupCategory: _cleanupCategory,
       senderId: _senderId,
@@ -438,7 +531,9 @@ class _EmailsScreenState extends State<EmailsScreen> {
     if (senderIds.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
-          content: Text('The selected emails do not identify a sender.'),
+          content: Text(
+            'Sender details are unavailable for these messages. Refresh and try again.',
+          ),
         ),
       );
       return;
@@ -446,6 +541,7 @@ class _EmailsScreenState extends State<EmailsScreen> {
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
+        scrollable: true,
         title: Text(
           'Unsubscribe from ${senderIds.length} sender${senderIds.length == 1 ? '' : 's'}?',
         ),
@@ -520,56 +616,71 @@ class _EmailsScreenState extends State<EmailsScreen> {
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(text)));
   }
 
+  Future<void> _showMailboxPicker() async {
+    FocusScope.of(context).unfocus();
+    final mailbox = await showModalBottomSheet<String>(
+      context: context,
+      useSafeArea: true,
+      builder: (context) => SingleChildScrollView(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const SizedBox(height: 12),
+            for (final entry in _mailboxes.entries)
+              ListTile(
+                title: Text(entry.value),
+                selected: entry.key == _mailbox,
+                trailing: entry.key == _mailbox
+                    ? const Icon(Icons.check_rounded)
+                    : null,
+                onTap: () => Navigator.pop(context, entry.key),
+              ),
+            const SizedBox(height: 12),
+          ],
+        ),
+      ),
+    );
+    if (!mounted || mailbox == null || mailbox == _mailbox) return;
+    setState(() {
+      _mailbox = mailbox;
+      _title = null;
+      _selection.clear();
+      _selectionMode = false;
+    });
+    await _load(reset: true);
+  }
+
+  Future<void> _applyFilters({String? category, String? query}) async {
+    FocusScope.of(context).unfocus();
+    setState(() {
+      _category = category;
+      if (query != null) {
+        _queryController.text = query;
+        _showSearch = query.isNotEmpty;
+      }
+      _selection.clear();
+      _selectionMode = false;
+    });
+    await _load(reset: true);
+  }
+
   Future<void> _showCategoryFilter() async {
-    final selected = await showModalBottomSheet<String>(
+    FocusScope.of(context).unfocus();
+    final selected = await showModalBottomSheet<SenderFilters>(
       context: context,
       isScrollControlled: true,
-      builder: (context) => SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(20, 4, 20, 22),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                'Filter by category',
-                style: Theme.of(context).textTheme.titleLarge,
-              ),
-              const SizedBox(height: 5),
-              Text(
-                'Show only the messages you want to review.',
-                style: Theme.of(context).textTheme.bodyMedium,
-              ),
-              const SizedBox(height: 18),
-              Flexible(
-                child: SingleChildScrollView(
-                  child: Wrap(
-                    spacing: 9,
-                    runSpacing: 10,
-                    children: [
-                      SelectablePill(
-                        label: 'All categories',
-                        selected: _category == null,
-                        onTap: () => Navigator.pop(context, 'ALL'),
-                      ),
-                      for (final category in _categories)
-                        SelectablePill(
-                          label: _friendly(category),
-                          selected: _category == category,
-                          onTap: () => Navigator.pop(context, category),
-                        ),
-                    ],
-                  ),
-                ),
-              ),
-            ],
-          ),
+      useSafeArea: true,
+      showDragHandle: true,
+      builder: (_) => SenderFiltersSheet(
+        messages: true,
+        initial: SenderFilters(
+          category: _category,
+          query: _queryController.text,
         ),
       ),
     );
     if (!mounted || selected == null) return;
-    setState(() => _category = selected == 'ALL' ? null : selected);
-    await _load(reset: true);
+    await _applyFilters(category: selected.category, query: selected.query);
   }
 
   @override
@@ -586,6 +697,48 @@ class _EmailsScreenState extends State<EmailsScreen> {
         }
       },
       child: AppPage(
+        header: AppHeader(
+          title: _title ?? mailboxTitle,
+          onTitleTap: _showMailboxPicker,
+          showBack: _showBack,
+          action: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              IconButton(
+                tooltip: _showSearch
+                    ? 'Close message search'
+                    : 'Search messages',
+                icon: Icon(
+                  _showSearch ? Icons.close_rounded : Icons.search_rounded,
+                ),
+                onPressed: () {
+                  setState(() => _showSearch = !_showSearch);
+                  if (!_showSearch && _queryController.text.isNotEmpty) {
+                    _queryController.clear();
+                    _load(reset: true);
+                  }
+                },
+              ),
+              IconButton(
+                tooltip: _selectionMode ? 'Cancel selection' : 'Select',
+                onPressed: _items.isEmpty
+                    ? null
+                    : () => setState(() {
+                        _selectionMode = !_selectionMode;
+                        if (!_selectionMode) _selection.clear();
+                      }),
+                icon: Icon(
+                  _selectionMode
+                      ? Icons.close_rounded
+                      : Icons.checklist_rounded,
+                ),
+              ),
+            ],
+          ),
+        ),
+        onRefresh: () => _load(reset: true),
+        plainBackground: true,
+        maxContentWidth: 1100,
         bottomNavigationBar: _selectionMode
             ? _BulkEmailActions(
                 count: _selection.count,
@@ -605,124 +758,84 @@ class _EmailsScreenState extends State<EmailsScreen> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            AppHeader(
-              title: _title ?? mailboxTitle,
-              subtitle: '$_total email message${_total == 1 ? '' : 's'}',
-              showBack: _showBack,
-              action: TextButton(
-                onPressed: _items.isEmpty
-                    ? null
-                    : () => setState(() {
-                        _selectionMode = !_selectionMode;
-                        if (!_selectionMode) _selection.clear();
-                      }),
-                child: Text(_selectionMode ? 'Cancel' : 'Select'),
+            const SizedBox(height: 12),
+            if (_showSearch) ...[
+              SearchBox(
+                hint: 'Search messages',
+                controller: _queryController,
+                onSubmitted: (_) => _load(reset: true),
+                trailing: IconButton(
+                  tooltip: 'Filter categories',
+                  onPressed: _showCategoryFilter,
+                  icon: const Icon(Icons.tune_rounded, size: 20),
+                ),
               ),
-            ),
-            SizedBox(height: context.gap(18)),
-            SearchBox(
-              hint: 'Search subject, sender or preview',
-              controller: _queryController,
-              onSubmitted: (_) => _load(reset: true),
-              trailing: IconButton(
-                tooltip: 'Filter categories',
-                onPressed: _showCategoryFilter,
-                icon: const Icon(Icons.tune_rounded, size: 20),
-              ),
-            ),
+              const SizedBox(height: 10),
+            ],
             const SizedBox(height: 16),
             SingleChildScrollView(
               scrollDirection: Axis.horizontal,
               physics: const BouncingScrollPhysics(),
               child: Row(
                 children: [
-                  for (final entry in _mailboxes.entries) ...[
-                    SelectablePill(
+                  for (final entry in <String?, String>{
+                    null: 'All',
+                    'PEOPLE': 'People',
+                    'PROMOTIONS': 'Offers',
+                    'NEWSLETTERS': 'Newsletters',
+                  }.entries) ...[
+                    MailFilterTab(
                       label: entry.value,
-                      selected: _mailbox == entry.key,
-                      onTap: () {
-                        setState(() {
-                          _mailbox = entry.key;
-                          _title = null;
-                          _selection.clear();
-                          _selectionMode = false;
-                        });
-                        _load(reset: true);
-                      },
+                      selected: _category == entry.key,
+                      onTap: () => _applyFilters(category: entry.key),
                     ),
                     const SizedBox(width: 8),
                   ],
                 ],
               ),
             ),
-            const SizedBox(height: 18),
-            Container(
-              padding: const EdgeInsets.fromLTRB(14, 11, 10, 11),
-              decoration: BoxDecoration(
-                color: AppColors.surface(context),
-                borderRadius: BorderRadius.circular(16),
-                border: Border.all(color: AppColors.borderFor(context)),
-              ),
-              child: Row(
-                children: [
-                  Container(
-                    width: 36,
-                    height: 36,
-                    decoration: BoxDecoration(
-                      color: AppColors.softFill(context, AppColors.primary),
-                      borderRadius: BorderRadius.circular(12),
-                    ),
-                    child: Icon(
-                      _mailboxIcon(_mailbox),
-                      size: 19,
-                      color: AppColors.primary,
-                    ),
+            const SizedBox(height: 10),
+            Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    _category == null
+                        ? '$_total ${_total == 1 ? 'message' : 'messages'}'
+                        : _friendly(_category!),
+                    style: Theme.of(context).textTheme.bodySmall,
                   ),
-                  const SizedBox(width: 11),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          mailboxTitle,
-                          style: Theme.of(context).textTheme.titleMedium,
-                        ),
-                        Text(
-                          _category == null
-                              ? 'All categories'
-                              : _friendly(_category!),
-                          style: Theme.of(context).textTheme.bodySmall,
-                        ),
-                      ],
-                    ),
+                ),
+                if (_category != null)
+                  IconButton(
+                    tooltip: 'Clear category filter',
+                    onPressed: () => _applyFilters(),
+                    icon: const Icon(Icons.close_rounded, size: 18),
                   ),
-                  if (_category != null)
-                    IconButton(
-                      tooltip: 'Clear category filter',
-                      onPressed: () {
-                        setState(() => _category = null);
-                        _load(reset: true);
-                      },
-                      icon: const Icon(Icons.close_rounded, size: 19),
-                    ),
-                  IconButton.filledTonal(
-                    tooltip: 'Refresh messages',
-                    onPressed: _loading ? null : () => _load(reset: true),
-                    icon: const Icon(Icons.refresh_rounded, size: 20),
+                IconButton(
+                  tooltip: 'Filter categories',
+                  onPressed: _showCategoryFilter,
+                  icon: const Icon(Icons.tune_rounded, size: 20),
+                ),
+                IconButton(
+                  tooltip: 'Refresh messages',
+                  onPressed: _loading ? null : () => _load(reset: true),
+                  icon: const Icon(Icons.refresh_rounded, size: 20),
+                ),
+                if (!_selectionMode && _mailbox != 'TRASH' && _total > 0)
+                  IconButton(
+                    key: const ValueKey('email-mailbox-actions'),
+                    tooltip: 'More email actions',
+                    onPressed: _acting ? null : _showMailboxActions,
+                    icon: const Icon(Icons.more_horiz_rounded, size: 21),
                   ),
-                  if (!_selectionMode && _mailbox != 'TRASH' && _total > 0) ...[
-                    const SizedBox(width: 4),
-                    IconButton.filledTonal(
-                      key: const ValueKey('email-mailbox-actions'),
-                      tooltip: 'More email actions',
-                      onPressed: _acting ? null : _showMailboxActions,
-                      icon: const Icon(Icons.more_horiz_rounded, size: 21),
-                    ),
-                  ],
-                ],
-              ),
+              ],
             ),
-            SizedBox(height: context.gap(16)),
+            MailboxSyncNotice(
+              summary: _syncSummary,
+              account:
+                  _repository.activeMailbox.value ??
+                  _repository.connectedAccounts.value.firstOrNull,
+            ),
             if (_selectionMode) ...[
               Wrap(
                 spacing: 8,
@@ -795,12 +908,14 @@ class _EmailsScreenState extends State<EmailsScreen> {
                     ),
                     const SizedBox(height: 14),
                     Text(
-                      'Nothing to review',
+                      _syncing ? 'Your inbox is syncing' : 'Nothing to review',
                       style: Theme.of(context).textTheme.titleMedium,
                     ),
                     const SizedBox(height: 5),
                     Text(
-                      'No messages match the selected mailbox and filters.',
+                      _syncing
+                          ? 'Messages appear here as your mailbox is scanned.'
+                          : 'No messages match the selected mailbox and filters.',
                       textAlign: TextAlign.center,
                       style: Theme.of(context).textTheme.bodyMedium,
                     ),
@@ -808,34 +923,36 @@ class _EmailsScreenState extends State<EmailsScreen> {
                 ),
               )
             else
-              Column(
-                children: [
-                  for (var index = 0; index < _items.length; index++) ...[
-                    _EmailRow(
-                      email: _items[index],
-                      selectionMode: _selectionMode,
-                      selected: _selection.contains(_items[index].id),
-                      onTap: () {
-                        if (_acting) return;
-                        if (_selectionMode) {
+              MailListSurface(
+                child: Column(
+                  children: [
+                    for (var index = 0; index < _items.length; index++) ...[
+                      _EmailRow(
+                        email: _items[index],
+                        selectionMode: _selectionMode,
+                        selected: _selection.contains(_items[index].id),
+                        onTap: () {
+                          if (_acting) return;
+                          if (_selectionMode) {
+                            setState(() {
+                              _selection.toggle(_items[index].id);
+                            });
+                          } else {
+                            _openEmail(_items[index]);
+                          }
+                        },
+                        onLongPress: () {
+                          if (_acting) return;
                           setState(() {
-                            _selection.toggle(_items[index].id);
+                            _selectionMode = true;
+                            _selection.selectAll([_items[index].id]);
                           });
-                        } else {
-                          _openEmail(_items[index]);
-                        }
-                      },
-                      onLongPress: () {
-                        if (_acting) return;
-                        setState(() {
-                          _selectionMode = true;
-                          _selection.selectAll([_items[index].id]);
-                        });
-                      },
-                    ),
-                    if (index != _items.length - 1) const SizedBox(height: 10),
+                        },
+                      ),
+                      if (index != _items.length - 1) const Divider(height: 1),
+                    ],
                   ],
-                ],
+                ),
               ),
             if (_inlineLoadError != null) ...[
               const SizedBox(height: 14),
@@ -905,163 +1022,14 @@ class _EmailRow extends StatelessWidget {
   final VoidCallback onLongPress;
 
   @override
-  Widget build(BuildContext context) {
-    final accent = _categoryColor(context, email.category);
-    return AppCard(
-      key: ValueKey('email-row-${email.id}'),
-      onTap: onTap,
-      onLongPress: onLongPress,
-      padding: const EdgeInsets.all(14),
-      borderColor: selected ? AppColors.primary : null,
-      color: selected
-          ? AppColors.primary.withValues(
-              alpha: AppColors.isDark(context) ? 0.16 : 0.045,
-            )
-          : null,
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          if (selectionMode) ...[
-            Padding(
-              padding: const EdgeInsets.only(top: 4),
-              child: Checkbox(
-                value: selected,
-                onChanged: (_) => onTap(),
-                visualDensity: VisualDensity.compact,
-              ),
-            ),
-            const SizedBox(width: 5),
-          ] else ...[
-            Stack(
-              clipBehavior: Clip.none,
-              children: [
-                Container(
-                  width: 46,
-                  height: 46,
-                  alignment: Alignment.center,
-                  decoration: BoxDecoration(
-                    color: AppColors.softFill(context, accent),
-                    borderRadius: BorderRadius.circular(15),
-                  ),
-                  child: Text(
-                    email.sender.isEmpty ? '?' : email.sender[0].toUpperCase(),
-                    style: TextStyle(
-                      color: accent,
-                      fontSize: 16,
-                      fontWeight: FontWeight.w800,
-                    ),
-                  ),
-                ),
-                if (!email.isRead)
-                  Positioned(
-                    right: -2,
-                    top: -2,
-                    child: Container(
-                      width: 10,
-                      height: 10,
-                      decoration: BoxDecoration(
-                        color: AppColors.primary,
-                        shape: BoxShape.circle,
-                        border: Border.all(
-                          color: AppColors.surface(context),
-                          width: 2,
-                        ),
-                      ),
-                    ),
-                  ),
-              ],
-            ),
-            const SizedBox(width: 12),
-          ],
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
-                  children: [
-                    Expanded(
-                      child: Text(
-                        email.sender,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: Theme.of(context).textTheme.titleMedium
-                            ?.copyWith(
-                              fontWeight: email.isRead
-                                  ? FontWeight.w600
-                                  : FontWeight.w800,
-                            ),
-                      ),
-                    ),
-                    const SizedBox(width: 8),
-                    Text(
-                      _compactDate(email.date),
-                      style: Theme.of(context).textTheme.labelSmall,
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 4),
-                Text(
-                  email.subject,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: Theme.of(context).textTheme.bodyLarge?.copyWith(
-                    fontWeight: email.isRead
-                        ? FontWeight.w500
-                        : FontWeight.w700,
-                    color: AppColors.textFor(context),
-                  ),
-                ),
-                if (email.snippet.isNotEmpty) ...[
-                  const SizedBox(height: 3),
-                  Text(
-                    email.snippet,
-                    maxLines: 2,
-                    overflow: TextOverflow.ellipsis,
-                    style: Theme.of(context).textTheme.bodySmall,
-                  ),
-                ],
-                const SizedBox(height: 10),
-                Row(
-                  children: [
-                    Flexible(
-                      child: StatusChip(
-                        label: _friendly(email.category),
-                        color: accent,
-                      ),
-                    ),
-                    if (!email.isRead) ...[
-                      const SizedBox(width: 6),
-                      const StatusChip(label: 'New', color: AppColors.primary),
-                    ],
-                    const Spacer(),
-                    if (email.hasAttachments)
-                      Padding(
-                        padding: const EdgeInsets.only(right: 7),
-                        child: Icon(
-                          Icons.attach_file_rounded,
-                          size: 16,
-                          color: AppColors.mutedFor(context),
-                        ),
-                      ),
-                    IconButton(
-                      tooltip: 'Open message',
-                      onPressed: onTap,
-                      visualDensity: VisualDensity.compact,
-                      icon: Icon(
-                        Icons.chevron_right_rounded,
-                        size: 19,
-                        color: AppColors.mutedFor(context),
-                      ),
-                    ),
-                  ],
-                ),
-              ],
-            ),
-          ),
-        ],
-      ),
-    );
-  }
+  Widget build(BuildContext context) => MailMessageRow(
+    key: ValueKey('email-row-${email.id}'),
+    email: email,
+    selectionMode: selectionMode,
+    selected: selected,
+    onTap: onTap,
+    onLongPress: onLongPress,
+  );
 }
 
 class _BulkEmailActions extends StatelessWidget {
@@ -1264,63 +1232,6 @@ class _SkeletonLine extends StatelessWidget {
       ),
     );
   }
-}
-
-IconData _mailboxIcon(String mailbox) {
-  return switch (mailbox) {
-    'UNREAD' => Icons.mark_email_unread_outlined,
-    'READ' => Icons.mark_email_read_outlined,
-    'ARCHIVED' => Icons.archive_outlined,
-    'TRASH' => Icons.delete_outline_rounded,
-    'ALL' => Icons.all_inbox_rounded,
-    _ => Icons.inbox_outlined,
-  };
-}
-
-Color _categoryColor(BuildContext context, String category) {
-  return switch (category.toUpperCase()) {
-    'PEOPLE' => Theme.of(context).colorScheme.primary,
-    'ORDERS' => AppColors.foregroundFor(context, AppColors.orange),
-    'FINANCE' => AppColors.foregroundFor(context, AppColors.success),
-    'NEWSLETTERS' => Theme.of(context).colorScheme.tertiary,
-    'PROMOTIONS' => Theme.of(context).colorScheme.secondary,
-    'TRAVEL' => AppColors.foregroundFor(context, AppColors.warning),
-    'SOCIAL' => AppColors.foregroundFor(context, AppColors.social),
-    'SPAM' => Theme.of(context).colorScheme.error,
-    _ => AppColors.mutedFor(context),
-  };
-}
-
-String _compactDate(String value) {
-  final parsed = DateTime.tryParse(value)?.toLocal();
-  if (parsed == null) return value;
-  final now = DateTime.now();
-  final sameDay =
-      parsed.year == now.year &&
-      parsed.month == now.month &&
-      parsed.day == now.day;
-  if (sameDay) {
-    final hour = parsed.hour == 0
-        ? 12
-        : (parsed.hour > 12 ? parsed.hour - 12 : parsed.hour);
-    final minute = parsed.minute.toString().padLeft(2, '0');
-    return '$hour:$minute ${parsed.hour >= 12 ? 'PM' : 'AM'}';
-  }
-  const months = [
-    'Jan',
-    'Feb',
-    'Mar',
-    'Apr',
-    'May',
-    'Jun',
-    'Jul',
-    'Aug',
-    'Sep',
-    'Oct',
-    'Nov',
-    'Dec',
-  ];
-  return '${months[parsed.month - 1]} ${parsed.day}';
 }
 
 String _friendly(String value) {

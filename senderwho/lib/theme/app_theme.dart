@@ -129,11 +129,11 @@ class AppTheme {
       ),
       pageTransitionsTheme: const PageTransitionsTheme(
         builders: {
-          TargetPlatform.android: _FixedShellPageTransitionsBuilder(),
-          TargetPlatform.iOS: _FixedShellPageTransitionsBuilder(),
-          TargetPlatform.macOS: _FixedShellPageTransitionsBuilder(),
-          TargetPlatform.windows: _FixedShellPageTransitionsBuilder(),
-          TargetPlatform.linux: _FixedShellPageTransitionsBuilder(),
+          TargetPlatform.android: FadeUpwardsPageTransitionsBuilder(),
+          TargetPlatform.iOS: CupertinoPageTransitionsBuilder(),
+          TargetPlatform.macOS: CupertinoPageTransitionsBuilder(),
+          TargetPlatform.windows: FadeUpwardsPageTransitionsBuilder(),
+          TargetPlatform.linux: FadeUpwardsPageTransitionsBuilder(),
         },
       ),
       progressIndicatorTheme: ProgressIndicatorThemeData(
@@ -324,7 +324,7 @@ class AppTheme {
         elevation: 0,
         backgroundColor: Colors.transparent,
         surfaceTintColor: Colors.transparent,
-        indicatorColor: visualPrimary.withValues(alpha: isDark ? 0.22 : 0.11),
+        indicatorColor: Colors.transparent,
         indicatorShape: RoundedRectangleBorder(
           borderRadius: BorderRadius.circular(AppRadii.sm),
         ),
@@ -347,19 +347,4 @@ class AppTheme {
       textTheme: appTextTheme,
     );
   }
-}
-
-/// Root routes swap immediately so shared shell controls (drawer and bottom
-/// navigation) never slide with the page. AppPage animates only its content.
-class _FixedShellPageTransitionsBuilder extends PageTransitionsBuilder {
-  const _FixedShellPageTransitionsBuilder();
-
-  @override
-  Widget buildTransitions<T>(
-    PageRoute<T> route,
-    BuildContext context,
-    Animation<double> animation,
-    Animation<double> secondaryAnimation,
-    Widget child,
-  ) => child;
 }

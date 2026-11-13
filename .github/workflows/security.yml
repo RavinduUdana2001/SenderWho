@@ -56,6 +56,8 @@ jobs:
       # The runtime image prunes dev-only tooling. Audit the exact dependency
       # class shipped to production; Trivy separately scans the final images.
       - run: npm audit --omit=dev --audit-level=high
+      - name: Audit build and development dependencies
+        run: npm audit --audit-level=high
 
   flutter:
     runs-on: ubuntu-latest

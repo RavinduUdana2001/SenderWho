@@ -1,8 +1,36 @@
 import { BackgroundJob, BackgroundJobStatus } from "@prisma/client";
 import { PrismaService } from "../database/prisma.service";
 import { DatabaseJobQueueService } from "./database-job-queue.service";
+import { gmailApiError } from "../providers/gmail/gmail.client";
 
 describe("DatabaseJobQueueService", () => {
+  it("honors Gmail cooldowns, increases later delays and still stops after bounded attempts", async () => {
+    const now = Date.now();
+    const updateMany = jest.fn().mockResolvedValue({ count: 1 });
+    const service = new DatabaseJobQueueService({
+      backgroundJob: { updateMany },
+    } as never);
+    const record = {
+      id: "scan",
+      attempts: 1,
+      maxAttempts: 4,
+      backoffMs: 2_000,
+    } as BackgroundJob;
+    for (const attempts of [1, 2, 3]) {
+      await service.fail(
+        { ...record, attempts },
+        "owner",
+        gmailApiError(403, "userRateLimitExceeded"),
+      );
+      const data = updateMany.mock.calls.at(-1)![0].data;
+      expect(data.status).toBe("QUEUED");
+      expect(data.availableAt.getTime()).toBeGreaterThanOrEqual(
+        now + 60_000 * 2 ** (attempts - 1),
+      );
+    }
+    await service.fail({ ...record, attempts: 4 }, "owner", gmailApiError(429));
+    expect(updateMany.mock.calls.at(-1)![0].data.status).toBe("FAILED");
+  });
   it("deduplicates an already active job", async () => {
     const active = {
       id: "cleanup-1",

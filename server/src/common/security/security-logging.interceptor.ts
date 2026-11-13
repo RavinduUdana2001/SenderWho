@@ -20,7 +20,7 @@ export class SecurityLoggingInterceptor implements NestInterceptor {
   intercept(context: ExecutionContext, next: CallHandler): Observable<unknown> {
     const request = context.switchToHttp().getRequest<RequestWithUser>();
     const response = context.switchToHttp().getResponse<Response>();
-    const correlationId = this.correlationId(request.header("x-request-id"));
+    const correlationId = randomUUID();
     const deviceHash = this.deviceHash(request.header("x-senderwho-device-id"));
     const startedAt = Date.now();
     request.correlationId = correlationId;
@@ -33,11 +33,11 @@ export class SecurityLoggingInterceptor implements NestInterceptor {
             event: "http.request.completed",
             correlationId,
             method: request.method,
-            route: request.route?.path ?? request.path,
+            route: request.route?.path ?? "[unmatched]",
             statusCode: response.statusCode,
             durationMs: Date.now() - startedAt,
             actorUserId: request.user?.id,
-            actorSessionId: request.user?.sessionId,
+            actorSessionHash: this.sessionHash(request.user?.sessionId),
             deviceHash,
           }),
         );
@@ -52,11 +52,11 @@ export class SecurityLoggingInterceptor implements NestInterceptor {
             : "http.request.failed",
           correlationId,
           method: request.method,
-          route: request.route?.path ?? request.path,
+          route: request.route?.path ?? "[unmatched]",
           statusCode,
           durationMs: Date.now() - startedAt,
           actorUserId: request.user?.id,
-          actorSessionId: request.user?.sessionId,
+          actorSessionHash: this.sessionHash(request.user?.sessionId),
           deviceHash,
           errorType:
             error instanceof Error ? error.constructor.name : "UnknownError",
@@ -68,10 +68,9 @@ export class SecurityLoggingInterceptor implements NestInterceptor {
     );
   }
 
-  private correlationId(value: string | undefined) {
-    return value && /^[A-Za-z0-9._-]{8,128}$/.test(value)
-      ? value
-      : randomUUID();
+  private sessionHash(value: string | undefined) {
+    if (!value) return undefined;
+    return createHash("sha256").update(value).digest("hex");
   }
 
   private deviceHash(value: string | undefined) {

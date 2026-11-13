@@ -1,37 +1,28 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
 import '../models/app_models.dart';
 import '../screens/sender_details_screen.dart';
 import '../services/senderwho_repository.dart';
+import '../services/repository_scope.dart';
 import '../theme/app_colors.dart';
 import '../theme/app_motion.dart';
-import '../theme/app_semantic_colors.dart';
 import '../utils/responsive.dart';
 import '../widgets/app_card.dart';
-import '../widgets/app_animated_progress.dart';
-import '../widgets/app_chips.dart';
+import '../widgets/mail_list_surface.dart';
 import '../widgets/app_header.dart';
 import '../widgets/app_page.dart';
-import '../widgets/icon_bubble.dart';
+import '../widgets/mail_avatar.dart';
+import '../widgets/mailbox_sync_notice.dart';
 import '../widgets/search_box.dart';
+import '../widgets/sender_filters_sheet.dart';
 
 class SenderListArguments {
   const SenderListArguments({this.control = 'ALL', this.title});
 
   final String control;
   final String? title;
-}
-
-Color _senderCategoryColor(BuildContext context, String category) {
-  return switch (category.trim().toLowerCase()) {
-    'social' || 'newsletters' || 'travel' => AppSemanticColors.of(context).info,
-    'promotions' ||
-    'orders' ||
-    'important' => AppSemanticColors.of(context).warning,
-    'spam' => Theme.of(context).colorScheme.error,
-    'unknown' => AppColors.mutedFor(context),
-    _ => Theme.of(context).colorScheme.primary,
-  };
 }
 
 class AllSendersScreen extends StatefulWidget {
@@ -44,7 +35,8 @@ class AllSendersScreen extends StatefulWidget {
   State<AllSendersScreen> createState() => _AllSendersScreenState();
 }
 
-class _AllSendersScreenState extends State<AllSendersScreen> {
+class _AllSendersScreenState extends State<AllSendersScreen>
+    with WidgetsBindingObserver {
   static const _tabs = <String, String>{
     'ALL': 'All',
     'PEOPLE': 'People',
@@ -55,19 +47,37 @@ class _AllSendersScreenState extends State<AllSendersScreen> {
   final _senders = <SenderInfo>[];
   String _kind = 'ALL';
   String _control = 'ALL';
+  String? _category;
   String? _title;
   bool _initialized = false;
   int _page = 0;
   int _total = 0;
+  bool _showSearch = false;
   bool _loading = false;
+  bool _reloadPending = false;
+  bool _loadingSyncStatus = false;
+  Timer? _syncRefresh;
+  DashboardSummary? _summary;
   bool _hasMore = false;
   bool _showBack = false;
   String? _error;
   String? _inlineLoadError;
+  String _appliedQuery = '';
   bool _inlineRetryResets = false;
 
   SenderWhoRepository get _repository =>
-      widget.repository ?? senderWhoRepository;
+      widget.repository ?? RepositoryScope.read(context);
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) _load(reset: true);
+  }
 
   @override
   void didChangeDependencies() {
@@ -85,28 +95,44 @@ class _AllSendersScreenState extends State<AllSendersScreen> {
 
   @override
   void dispose() {
+    _syncRefresh?.cancel();
+    WidgetsBinding.instance.removeObserver(this);
     _queryController.dispose();
     super.dispose();
   }
 
   Future<void> _load({required bool reset}) async {
-    if (_loading) return;
+    reset = reset || _queryController.text.trim() != _appliedQuery;
+    if (_loading) {
+      if (reset) _reloadPending = true;
+      return;
+    }
+    _syncRefresh?.cancel();
+    if (reset) _appliedQuery = _queryController.text.trim();
     setState(() {
       _loading = true;
       if (reset) _error = null;
       _inlineLoadError = null;
     });
+    unawaited(_loadSyncStatus());
     final result = await _repository.getSenders(
       page: reset ? 1 : _page + 1,
       kind: _kind,
       control: _control,
-      query: _queryController.text,
+      query: _appliedQuery,
+      category: _category,
     );
     if (!mounted) return;
+    if (_reloadPending) {
+      _reloadPending = false;
+      _loading = false;
+      unawaited(_load(reset: true));
+      return;
+    }
     setState(() {
       _loading = false;
       if (result == null) {
-        const message = 'Could not load senders.';
+        final message = _repository.lastError ?? 'Could not load senders.';
         if (_senders.isEmpty) {
           _error = message;
         } else {
@@ -124,51 +150,239 @@ class _AllSendersScreenState extends State<AllSendersScreen> {
       _error = null;
       _inlineLoadError = null;
     });
+    _scheduleSyncRefresh();
+  }
+
+  Future<void> _loadSyncStatus() async {
+    if (_loadingSyncStatus || !_repository.isAuthenticated) return;
+    _loadingSyncStatus = true;
+    try {
+      final summary = await _repository.getDashboard();
+      if (!mounted) return;
+      if (summary.available) setState(() => _summary = summary);
+    } on Object {
+      // A statistics outage must not delay the sender list.
+    } finally {
+      _loadingSyncStatus = false;
+      if (mounted && !_loading) _scheduleSyncRefresh();
+    }
+  }
+
+  void _scheduleSyncRefresh() {
+    _syncRefresh?.cancel();
+    if (_syncing ||
+        (_summary?.syncRetryAt ??
+                _repository.activeMailbox.value?.syncRetryAt) !=
+            null) {
+      _syncRefresh = Timer(
+        const Duration(seconds: 5),
+        () => _load(reset: true),
+      );
+    }
+  }
+
+  bool get _syncing => const {'PENDING', 'SYNCING', 'PARTIAL'}.contains(
+    _summary?.syncStatus ?? _repository.activeMailbox.value?.syncStatus,
+  );
+
+  Future<void> _showFilters() async {
+    FocusScope.of(context).unfocus();
+    final initialCategory =
+        _category ??
+        (const {'PEOPLE', 'NEWSLETTERS'}.contains(_kind) ? _kind : null);
+    final result = await showModalBottomSheet<SenderFilters>(
+      context: context,
+      isScrollControlled: true,
+      useSafeArea: true,
+      showDragHandle: true,
+      builder: (_) => SenderFiltersSheet(
+        initial: SenderFilters(
+          category: initialCategory,
+          query: _queryController.text,
+        ),
+      ),
+    );
+    if (!mounted || result == null) return;
+    await _applyFilters(
+      kind: switch (result.category) {
+        'PEOPLE' => 'PEOPLE',
+        'NEWSLETTERS' => 'NEWSLETTERS',
+        _ => 'ALL',
+      },
+      category: result.category,
+      query: result.query,
+    );
+  }
+
+  Future<void> _applyFilters({
+    required String kind,
+    String? category,
+    String? query,
+  }) async {
+    FocusScope.of(context).unfocus();
+    setState(() {
+      _kind = kind;
+      _category = category;
+      if (query != null) {
+        _queryController.text = query;
+        _showSearch = query.isNotEmpty;
+      }
+    });
+    await _load(reset: true);
+  }
+
+  void _clearFilters() {
+    setState(() {
+      _kind = 'ALL';
+      _category = null;
+      _queryController.clear();
+      _showSearch = false;
+    });
+    _load(reset: true);
   }
 
   @override
   Widget build(BuildContext context) {
     return AppPage(
+      header: AppHeader(
+        title: _title ?? 'All Senders',
+        showBack: _showBack,
+        action: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            IconButton(
+              tooltip: _showSearch ? 'Close sender search' : 'Search senders',
+              onPressed: () {
+                setState(() => _showSearch = !_showSearch);
+                if (!_showSearch && _queryController.text.isNotEmpty) {
+                  _queryController.clear();
+                  _load(reset: true);
+                }
+              },
+              icon: Icon(
+                _showSearch ? Icons.close_rounded : Icons.search_rounded,
+              ),
+            ),
+            IconButton(
+              key: const ValueKey('sender-filter-button'),
+              tooltip: 'Filter senders',
+              onPressed: _showFilters,
+              icon: Badge(
+                backgroundColor: Theme.of(context).colorScheme.primary,
+                isLabelVisible: _category != null,
+                child: const Icon(Icons.tune_rounded, size: 22),
+              ),
+            ),
+          ],
+        ),
+      ),
+      onRefresh: () => _load(reset: true),
+      plainBackground: true,
+      maxContentWidth: 1100,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          AppHeader(
-            title: _title ?? 'All Senders',
-            subtitle: '$_total senders found in your inbox',
-            showBack: _showBack,
-            action: IconButton.filledTonal(
-              tooltip: 'Refresh senders',
-              onPressed: _loading ? null : () => _load(reset: true),
-              icon: const Icon(Icons.refresh_rounded, size: 20),
+          const SizedBox(height: 12),
+          if (_showSearch) ...[
+            SearchBox(
+              controller: _queryController,
+              hint: 'Search senders',
+              onSubmitted: (_) => _load(reset: true),
+              trailing: IconButton(
+                tooltip: 'Apply sender search',
+                onPressed: () => _load(reset: true),
+                icon: const Icon(Icons.arrow_forward_rounded, size: 20),
+              ),
             ),
-          ),
-          SizedBox(height: context.gap(14)),
-          SearchBox(
-            controller: _queryController,
-            hint: 'Search name, email or domain',
-            onSubmitted: (_) => _load(reset: true),
-          ),
-          SizedBox(height: context.gap(12)),
+            const SizedBox(height: 10),
+          ],
           SingleChildScrollView(
             scrollDirection: Axis.horizontal,
             physics: const BouncingScrollPhysics(),
             child: Row(
               children: [
                 for (final tab in _tabs.entries) ...[
-                  SelectablePill(
+                  MailFilterTab(
                     label: tab.value,
                     selected: _kind == tab.key,
-                    onTap: () {
-                      setState(() => _kind = tab.key);
-                      _load(reset: true);
-                    },
+                    onTap: () => _applyFilters(
+                      kind: tab.key,
+                      category:
+                          const {'PEOPLE', 'NEWSLETTERS'}.contains(tab.key)
+                          ? tab.key
+                          : null,
+                    ),
                   ),
                   const SizedBox(width: 8),
                 ],
               ],
             ),
           ),
-          SizedBox(height: context.gap(14)),
+          const SizedBox(height: 6),
+          Row(
+            children: [
+              Expanded(
+                child: _category == null
+                    ? (_page == 0
+                          ? const SizedBox.shrink()
+                          : Text(
+                              '$_total ${_total == 1 ? 'sender' : 'senders'}',
+                              style: Theme.of(context).textTheme.bodySmall,
+                            ))
+                    : Align(
+                        alignment: Alignment.centerLeft,
+                        child: InputChip(
+                          key: const ValueKey('sender-active-category'),
+                          label: Text(
+                            senderCategories[_category] ?? _category!,
+                          ),
+                          deleteButtonTooltipMessage: 'Clear category filter',
+                          onDeleted: () {
+                            setState(() {
+                              _category = null;
+                              _kind = 'ALL';
+                            });
+                            _load(reset: true);
+                          },
+                        ),
+                      ),
+              ),
+              IconButton(
+                tooltip: 'Refresh senders',
+                onPressed: _loading ? null : () => _load(reset: true),
+                icon: const Icon(Icons.refresh_rounded, size: 22),
+              ),
+            ],
+          ),
+          if (_loading && _senders.isNotEmpty)
+            const LinearProgressIndicator(minHeight: 2),
+          SizedBox(height: context.gap(8)),
+          if (_syncing)
+            Padding(
+              padding: EdgeInsets.only(bottom: 12),
+              child: Row(
+                children: [
+                  const SizedBox.square(
+                    dimension: 14,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Text(
+                      _senders.isEmpty
+                          ? 'Scanning your mailbox. New results appear automatically.'
+                          : 'Syncing older mail in the background.',
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          MailboxSyncNotice(
+            summary: _summary,
+            account:
+                _repository.activeMailbox.value ??
+                _repository.connectedAccounts.value.firstOrNull,
+          ),
           if (_loading && _senders.isEmpty)
             const _SenderListSkeleton()
           else if (_error != null)
@@ -228,17 +442,28 @@ class _AllSendersScreenState extends State<AllSendersScreen> {
                     ),
                     const SizedBox(height: 5),
                     Text(
-                      'Try another sender type or search term.',
+                      _queryController.text.trim().isEmpty &&
+                              _kind == 'ALL' &&
+                              _category == null &&
+                              _control == 'ALL'
+                          ? 'Senders appear after your mailbox is scanned. Refresh to check again.'
+                          : 'Try another category, sender type, or search term.',
                       textAlign: TextAlign.center,
                       style: Theme.of(context).textTheme.bodyMedium,
                     ),
+                    if (_category != null ||
+                        _kind != 'ALL' ||
+                        _queryController.text.isNotEmpty)
+                      TextButton(
+                        onPressed: _clearFilters,
+                        child: const Text('Clear filters'),
+                      ),
                   ],
                 ),
               ),
             )
           else
-            AppCard(
-              padding: EdgeInsets.zero,
+            MailListSurface(
               child: AnimatedSwitcher(
                 duration: AppMotion.responsive(context, AppMotion.standard),
                 switchInCurve: AppMotion.enter,
@@ -254,7 +479,7 @@ class _AllSendersScreenState extends State<AllSendersScreen> {
                       if (i != _senders.length - 1)
                         Divider(
                           height: 1,
-                          indent: 64,
+                          indent: 0,
                           color: AppColors.borderFor(
                             context,
                           ).withValues(alpha: 0.62),
@@ -317,88 +542,103 @@ class SenderRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final unread = sender.unreadMessages > 0;
     return InkWell(
+      key: ValueKey('sender-row-${sender.id}'),
       onTap: () async {
         await Navigator.pushNamed(
           context,
           SenderDetailsScreen.routeName,
           arguments: sender.id,
         );
-        onChanged();
+        if (context.mounted) onChanged();
       },
       child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 13),
-        child: Row(
-          children: [
-            _IdentityAvatar(sender: sender),
-            const SizedBox(width: 10),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    sender.name,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: Theme.of(context).textTheme.titleMedium,
-                  ),
-                  const SizedBox(height: 3),
-                  Tooltip(
-                    message: sender.email,
-                    child: Text(
+        padding: const EdgeInsets.symmetric(vertical: 12),
+        child: LayoutBuilder(
+          builder: (context, constraints) => Row(
+            children: [
+              _IdentityAvatar(sender: sender),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Expanded(
+                          child: Text(
+                            sender.name,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: Theme.of(context).textTheme.bodyMedium
+                                ?.copyWith(
+                                  color: AppColors.textFor(context),
+                                  fontWeight: unread
+                                      ? FontWeight.w700
+                                      : FontWeight.w500,
+                                ),
+                          ),
+                        ),
+                        if (sender.isTrusted) ...[
+                          const SizedBox(width: 4),
+                          Tooltip(
+                            message: 'Trusted by you',
+                            child: Icon(
+                              Icons.star_rounded,
+                              size: 15,
+                              color: AppColors.primaryFor(context),
+                            ),
+                          ),
+                        ],
+                      ],
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
                       sender.email,
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                       style: Theme.of(context).textTheme.bodySmall,
                     ),
-                  ),
-                  const SizedBox(height: 8),
-                  Wrap(
-                    spacing: 8,
-                    runSpacing: 6,
-                    crossAxisAlignment: WrapCrossAlignment.center,
-                    children: [
-                      if (sender.identityStatus == 'SUSPICIOUS')
-                        StatusChip(
-                          label: sender.identityRiskLevel == 'HIGH'
-                              ? 'High identity risk'
-                              : 'Possible impersonation',
-                          color: sender.identityRiskLevel == 'HIGH'
-                              ? AppColors.danger
-                              : AppColors.warning,
-                        )
-                      else if (sender.isTrusted)
-                        const StatusChip(
-                          label: 'Trusted by you',
-                          color: AppColors.success,
-                        )
-                      else
-                        StatusChip(
-                          label: sender.category,
-                          color: _senderCategoryColor(context, sender.category),
-                        ),
-                      Text(
-                        '${sender.totalMessages} messages · ${sender.unreadMessages} unread',
-                        style: Theme.of(context).textTheme.labelSmall,
-                      ),
-                    ],
-                  ),
-                ],
+                  ],
+                ),
               ),
-            ),
-            const SizedBox(width: 10),
-            _TrustScore(
-              score: sender.score,
-              status: sender.identityStatus,
-              risk: sender.identityRiskLevel,
-            ),
-            const SizedBox(width: 3),
-            Icon(
-              Icons.chevron_right_rounded,
-              size: 20,
-              color: AppColors.mutedFor(context),
-            ),
-          ],
+              if (constraints.maxWidth >= 600) ...[
+                const SizedBox(width: 16),
+                SizedBox(
+                  width: 110,
+                  child: Text(
+                    sender.category,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: Theme.of(context).textTheme.bodySmall,
+                  ),
+                ),
+              ],
+              const SizedBox(width: 12),
+              Tooltip(
+                message:
+                    '${sender.totalMessages} messages, ${sender.unreadMessages} unread',
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.end,
+                  children: [
+                    Text(
+                      '${sender.totalMessages}',
+                      style: Theme.of(context).textTheme.labelMedium,
+                    ),
+                    if (unread)
+                      Text(
+                        '${sender.unreadMessages} unread',
+                        style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                          color: AppColors.primaryFor(context),
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                  ],
+                ),
+              ),
+            ],
+          ),
         ),
       ),
     );
@@ -407,138 +647,30 @@ class SenderRow extends StatelessWidget {
 
 class _IdentityAvatar extends StatelessWidget {
   const _IdentityAvatar({required this.sender});
-
   final SenderInfo sender;
 
   @override
   Widget build(BuildContext context) {
-    if (!sender.isBlocked && sender.identityStatus == 'UNVERIFIED') {
-      const label = 'Sender identity is unverified';
-      return Tooltip(
-        message: label,
-        child: Semantics(
-          label: '$label. ${sender.name}',
-          image: true,
-          child: SizedBox.square(
-            dimension: 40,
-            child: Stack(
-              clipBehavior: Clip.none,
-              children: [
-                IconBubble(
-                  icon: Icons.person_outline_rounded,
-                  label: sender.initial,
-                  size: 40,
-                  iconSize: 20,
-                  backgroundColor: sender.color,
-                ),
-                Positioned(
-                  right: -3,
-                  bottom: -3,
-                  child: Container(
-                    width: 17,
-                    height: 17,
-                    alignment: Alignment.center,
-                    decoration: BoxDecoration(
-                      color: AppColors.surface(context),
-                      shape: BoxShape.circle,
-                      border: Border.all(
-                        color: AppColors.borderFor(context),
-                        width: 1.5,
-                      ),
-                    ),
-                    child: Icon(
-                      Icons.question_mark_rounded,
-                      size: 10,
-                      color: AppColors.mutedFor(context),
-                    ),
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ),
-      );
-    }
-
-    final (icon, color, label) = switch ((
-      sender.isBlocked,
-      sender.identityStatus,
-      sender.identityRiskLevel,
-    )) {
-      (true, _, _) => (Icons.block_rounded, AppColors.danger, 'Blocked sender'),
-      (false, 'VERIFIED', _) => (
-        Icons.gpp_good_rounded,
-        AppColors.success,
-        'Verified sender identity',
-      ),
-      (false, 'SUSPICIOUS', 'HIGH') => (
-        Icons.warning_rounded,
-        AppColors.danger,
-        'High-risk sender identity',
-      ),
-      (false, 'SUSPICIOUS', _) => (
-        Icons.warning_amber_rounded,
-        AppColors.warning,
-        'Possible sender impersonation',
-      ),
-      _ => (Icons.help_outline_rounded, AppColors.mutedFor(context), 'Unknown'),
-    };
-    final visualColor = AppColors.visualAccentFor(context, color);
+    final (label, icon) = sender.isBlocked
+        ? ('Blocked sender', Icons.block_rounded)
+        : sender.identityStatus == 'SUSPICIOUS'
+        ? (
+            sender.identityRiskLevel == 'HIGH'
+                ? 'High-risk sender identity'
+                : 'Possible sender impersonation',
+            Icons.warning_amber_rounded,
+          )
+        : sender.identityStatus == 'VERIFIED'
+        ? ('Verified sender identity', null)
+        : ('Sender identity is unverified', null);
     return Tooltip(
       message: label,
-      child: Semantics(
-        label: label,
-        image: true,
-        child: IconBubble(
-          icon: icon,
-          size: 40,
-          iconSize: 20,
-          color: visualColor,
-          backgroundColor: AppColors.softFill(context, color),
-        ),
-      ),
-    );
-  }
-}
-
-class _TrustScore extends StatelessWidget {
-  const _TrustScore({
-    required this.score,
-    this.status = 'UNVERIFIED',
-    this.risk = 'LOW',
-  });
-
-  final int score;
-  final String status;
-  final String risk;
-
-  @override
-  Widget build(BuildContext context) {
-    final indicatorColor = status == 'VERIFIED'
-        ? AppColors.primary
-        : status == 'SUSPICIOUS' && risk == 'HIGH'
-        ? AppColors.danger
-        : status == 'SUSPICIOUS'
-        ? AppColors.warning
-        : AppColors.mutedFor(context);
-    return Tooltip(
-      message: 'Sender confidence: $score out of 100',
-      child: Semantics(
-        label: 'Sender confidence $score out of 100',
-        child: AppAnimatedProgressRing(
-          value: score / 100,
-          size: 36,
-          strokeWidth: 3.5,
-          color: AppColors.visualAccentFor(context, indicatorColor),
-          backgroundColor: AppColors.trackFor(context),
-          child: Text(
-            '$score',
-            style: Theme.of(context).textTheme.labelSmall?.copyWith(
-              color: AppColors.textFor(context),
-              fontWeight: FontWeight.w700,
-            ),
-          ),
-        ),
+      child: MailAvatar(
+        name: sender.name,
+        label: '$label. ${sender.name}',
+        badge: icon == null
+            ? null
+            : Icon(icon, size: 14, color: Theme.of(context).colorScheme.error),
       ),
     );
   }
@@ -549,51 +681,43 @@ class _SenderListSkeleton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Column(
-      children: List.generate(
-        4,
-        (index) => Padding(
-          padding: const EdgeInsets.only(bottom: 10),
-          child: AppCard(
-            padding: const EdgeInsets.all(15),
-            child: Row(
-              children: [
-                Container(
-                  width: 48,
-                  height: 48,
-                  decoration: BoxDecoration(
-                    color: AppColors.trackFor(context),
-                    borderRadius: BorderRadius.circular(15),
+    return MailListSurface(
+      child: Column(
+        children: [
+          for (var i = 0; i < 7; i++) ...[
+            Padding(
+              padding: const EdgeInsets.all(12),
+              child: Row(
+                children: [
+                  CircleAvatar(
+                    radius: 18,
+                    backgroundColor: AppColors.trackFor(context),
                   ),
-                ),
-                const SizedBox(width: 13),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Container(
-                        height: 10,
-                        width: index.isEven ? 120 : 155,
-                        decoration: BoxDecoration(
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Container(
+                          width: i.isEven ? 120 : 155,
+                          height: 10,
                           color: AppColors.trackFor(context),
-                          borderRadius: BorderRadius.circular(999),
                         ),
-                      ),
-                      const SizedBox(height: 10),
-                      Container(
-                        height: 9,
-                        decoration: BoxDecoration(
+                        const SizedBox(height: 8),
+                        Container(
+                          height: 8,
+                          width: 180,
                           color: AppColors.trackFor(context),
-                          borderRadius: BorderRadius.circular(999),
                         ),
-                      ),
-                    ],
+                      ],
+                    ),
                   ),
-                ),
-              ],
+                ],
+              ),
             ),
-          ),
-        ),
+            if (i < 6) const Divider(height: 1),
+          ],
+        ],
       ),
     );
   }

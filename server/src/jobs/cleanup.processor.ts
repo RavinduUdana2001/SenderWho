@@ -27,6 +27,7 @@ export class CleanupProcessor {
   ) {}
 
   async process(job: ProcessorJob<{ cleanupJobId: string }>) {
+    job.signal?.throwIfAborted();
     const cleanupJob = await this.prisma.cleanupJob.findUniqueOrThrow({
       where: { id: job.data.cleanupJobId },
     });
@@ -95,6 +96,7 @@ export class CleanupProcessor {
       let completedSinceProgress = 0;
 
       await this.mapWithConcurrency(items, 6, async (item) => {
+        job.signal?.throwIfAborted();
         const currentJob = await this.prisma.cleanupJob.findUnique({
           where: { id: cleanupJob.id },
           select: {
@@ -147,6 +149,7 @@ export class CleanupProcessor {
         }
 
         try {
+          job.signal?.throwIfAborted();
           const yahooResult =
             provider === "YAHOO"
               ? await this.yahooSync!.applyMessageAction(
@@ -199,6 +202,7 @@ export class CleanupProcessor {
                 cleanupJob.emailAccountId,
                 true,
               );
+              job.signal?.throwIfAborted();
               await this.gmail.trashMessage(
                 accessToken,
                 item.providerMessageId,

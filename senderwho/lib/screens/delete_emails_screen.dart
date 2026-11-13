@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../models/app_models.dart';
 import '../services/senderwho_repository.dart';
+import '../services/repository_scope.dart';
 import '../theme/app_colors.dart';
 import '../utils/responsive.dart';
 import '../widgets/app_button.dart';
@@ -12,7 +13,8 @@ import '../widgets/icon_bubble.dart';
 import 'bulk_clean_screen.dart';
 
 class DeleteEmailsScreen extends StatefulWidget {
-  const DeleteEmailsScreen({super.key});
+  const DeleteEmailsScreen({super.key, this.repository});
+  final SenderWhoRepository? repository;
 
   static const routeName = '/delete-emails';
 
@@ -21,7 +23,10 @@ class DeleteEmailsScreen extends StatefulWidget {
 }
 
 class _DeleteEmailsScreenState extends State<DeleteEmailsScreen> {
-  late Future<List<CleanupSuggestion>> _suggestionsFuture = senderWhoRepository
+  SenderWhoRepository get _repository =>
+      widget.repository ?? RepositoryScope.read(context);
+
+  late Future<List<CleanupSuggestion>> _suggestionsFuture = _repository
       .getCleanupSuggestions();
 
   @override
@@ -38,13 +43,13 @@ class _DeleteEmailsScreenState extends State<DeleteEmailsScreen> {
         );
 
         return AppPage(
+          header: const AppHeader(
+            title: 'Delete Emails',
+            subtitle: 'Review suspicious-message cleanup',
+            showBack: true,
+          ),
           child: Column(
             children: [
-              const AppHeader(
-                title: 'Delete Emails',
-                subtitle: 'Review suspicious-message cleanup',
-                showBack: true,
-              ),
               SizedBox(height: context.gap(18)),
               AppCard(
                 padding: const EdgeInsets.all(24),
@@ -110,8 +115,7 @@ class _DeleteEmailsScreenState extends State<DeleteEmailsScreen> {
                 const SizedBox(height: 10),
                 OutlinedButton.icon(
                   onPressed: () => setState(() {
-                    _suggestionsFuture = senderWhoRepository
-                        .getCleanupSuggestions();
+                    _suggestionsFuture = _repository.getCleanupSuggestions();
                   }),
                   icon: const Icon(Icons.refresh_rounded),
                   label: const Text('Try again'),

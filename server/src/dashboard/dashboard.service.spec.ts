@@ -1,3 +1,4 @@
+import { mailboxScope } from "../common/mailbox-scope";
 import { DashboardService } from "./dashboard.service";
 
 describe("DashboardService", () => {
@@ -62,7 +63,7 @@ describe("DashboardService", () => {
 
     expect(prisma.message.aggregate).toHaveBeenCalledWith({
       where: {
-        userId: "test-user",
+        ...mailboxScope("test-user"),
         isTrashed: false,
         isImportant: false,
         category: { not: "IMPORTANT" },

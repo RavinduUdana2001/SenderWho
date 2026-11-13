@@ -1,9 +1,11 @@
 import 'dart:async';
+import '../utils/user_friendly_error.dart';
 
 import 'package:flutter/material.dart';
 
 import '../models/app_models.dart';
 import '../services/senderwho_repository.dart';
+import '../services/repository_scope.dart';
 import '../theme/app_colors.dart';
 import '../utils/responsive.dart';
 import '../widgets/app_card.dart';
@@ -13,6 +15,11 @@ import '../widgets/app_header.dart';
 import '../widgets/app_page.dart';
 import '../widgets/icon_bubble.dart';
 import '../widgets/section_title.dart';
+
+class ConnectedAccountsArguments {
+  const ConnectedAccountsArguments({this.addMailbox = false});
+  final bool addMailbox;
+}
 
 class ConnectedAccountsScreen extends StatefulWidget {
   const ConnectedAccountsScreen({super.key, this.repository});
@@ -32,15 +39,27 @@ class _ConnectedAccountsScreenState extends State<ConnectedAccountsScreen> {
   final Set<String> _busyAccountIds = {};
   String? _connectingProvider;
   Timer? _refreshTimer;
+  bool _openAddMailbox = false;
+  bool _readArguments = false;
 
   SenderWhoRepository get _repository =>
-      widget.repository ?? senderWhoRepository;
+      widget.repository ?? RepositoryScope.read(context);
 
   @override
   void initState() {
     super.initState();
     _accountsFuture = _loadAccounts();
     _providersFuture = _repository.availableAuthProviders();
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    if (_readArguments) return;
+    _readArguments = true;
+    final arguments = ModalRoute.of(context)?.settings.arguments;
+    _openAddMailbox =
+        arguments is ConnectedAccountsArguments && arguments.addMailbox;
   }
 
   @override
@@ -58,7 +77,8 @@ class _ConnectedAccountsScreenState extends State<ConnectedAccountsScreen> {
           (account) =>
               account.syncStatus == 'PENDING' ||
               account.syncStatus == 'SYNCING' ||
-              account.syncStatus == 'PARTIAL',
+              account.syncStatus == 'PARTIAL' ||
+              account.hasScheduledRetry,
         )) {
       _refreshTimer = Timer(const Duration(seconds: 2), _refresh);
     }
@@ -74,7 +94,11 @@ class _ConnectedAccountsScreenState extends State<ConnectedAccountsScreen> {
   }
 
   Future<void> _queueSync(ConnectedEmailAccount account) async {
-    if (_busyAccountIds.contains(account.id)) return;
+    if (_busyAccountIds.isNotEmpty ||
+        _connectingProvider != null ||
+        _repository.switchingMailbox.value != null) {
+      return;
+    }
     setState(() => _busyAccountIds.add(account.id));
     final queued = await _repository.queueAccountSync(account.id);
     if (!mounted) return;
@@ -92,13 +116,18 @@ class _ConnectedAccountsScreenState extends State<ConnectedAccountsScreen> {
   }
 
   Future<void> _disconnect(ConnectedEmailAccount account) async {
-    if (_busyAccountIds.contains(account.id)) return;
+    if (_busyAccountIds.isNotEmpty ||
+        _connectingProvider != null ||
+        _repository.switchingMailbox.value != null) {
+      return;
+    }
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
+        scrollable: true,
         title: Text('Disconnect ${_providerLabel(account)}?'),
         content: Text(
-          'SenderWho will revoke access for ${account.emailAddress} and stop future scans. Stored metadata remains until you delete your SenderWho data.${account.isActive ? ' Another available mailbox will become current.' : ''}',
+          'SenderWho will revoke access for ${account.emailAddress} and stop future scans. Saved sender details and message previews remain until you delete your SenderWho account.${account.isActive ? ' Another available mailbox will become current.' : ''}',
         ),
         actions: [
           TextButton(
@@ -107,7 +136,10 @@ class _ConnectedAccountsScreenState extends State<ConnectedAccountsScreen> {
           ),
           FilledButton(
             onPressed: () => Navigator.pop(context, true),
-            style: FilledButton.styleFrom(backgroundColor: AppColors.danger),
+            style: FilledButton.styleFrom(
+              backgroundColor: Theme.of(context).colorScheme.error,
+              foregroundColor: Theme.of(context).colorScheme.onError,
+            ),
             child: const Text('Disconnect'),
           ),
         ],
@@ -133,7 +165,11 @@ class _ConnectedAccountsScreenState extends State<ConnectedAccountsScreen> {
   }
 
   Future<void> _reconnect(ConnectedEmailAccount account) async {
-    if (_busyAccountIds.contains(account.id)) return;
+    if (_busyAccountIds.isNotEmpty ||
+        _connectingProvider != null ||
+        _repository.switchingMailbox.value != null) {
+      return;
+    }
     setState(() => _busyAccountIds.add(account.id));
     final connected = await _repository.connectEmailAccount(
       account.provider.toLowerCase(),
@@ -155,7 +191,11 @@ class _ConnectedAccountsScreenState extends State<ConnectedAccountsScreen> {
   }
 
   Future<void> _activate(ConnectedEmailAccount account) async {
-    if (account.isActive || _busyAccountIds.contains(account.id)) return;
+    if (account.isActive ||
+        _busyAccountIds.isNotEmpty ||
+        _connectingProvider != null) {
+      return;
+    }
     setState(() => _busyAccountIds.add(account.id));
     final activated = await _repository.activateEmailAccount(account.id);
     if (!mounted) return;
@@ -173,7 +213,11 @@ class _ConnectedAccountsScreenState extends State<ConnectedAccountsScreen> {
   }
 
   Future<void> _connect(String provider) async {
-    if (_connectingProvider != null) return;
+    if (_connectingProvider != null ||
+        _busyAccountIds.isNotEmpty ||
+        _repository.switchingMailbox.value != null) {
+      return;
+    }
     setState(() => _connectingProvider = provider);
     final connected = await _repository.connectEmailAccount(provider);
     if (!mounted) return;
@@ -208,40 +252,14 @@ class _ConnectedAccountsScreenState extends State<ConnectedAccountsScreen> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Row(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  const IconBubble(
-                    icon: Icons.add_link_rounded,
-                    size: 42,
-                    iconSize: 21,
-                    color: AppColors.primary,
-                  ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          'Add another mailbox',
-                          style: Theme.of(context).textTheme.titleSmall,
-                        ),
-                        const SizedBox(height: 4),
-                        Text(
-                          'Connect Gmail, Microsoft Outlook, or Yahoo Mail without changing your SenderWho sign-in.',
-                          style: Theme.of(context).textTheme.bodySmall,
-                        ),
-                      ],
-                    ),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 16),
               SizedBox(
                 width: double.infinity,
                 child: FilledButton.tonalIcon(
                   key: const ValueKey('add-gmail-account'),
-                  onPressed: connecting == null && googleEnabled
+                  onPressed:
+                      connecting == null &&
+                          _busyAccountIds.isEmpty &&
+                          googleEnabled
                       ? () => _connect('google')
                       : null,
                   icon: connecting == 'google'
@@ -262,7 +280,10 @@ class _ConnectedAccountsScreenState extends State<ConnectedAccountsScreen> {
                 width: double.infinity,
                 child: OutlinedButton.icon(
                   key: const ValueKey('add-microsoft-account'),
-                  onPressed: connecting == null && microsoftEnabled
+                  onPressed:
+                      connecting == null &&
+                          _busyAccountIds.isEmpty &&
+                          microsoftEnabled
                       ? () => _connect('microsoft')
                       : null,
                   icon: connecting == 'microsoft'
@@ -285,7 +306,10 @@ class _ConnectedAccountsScreenState extends State<ConnectedAccountsScreen> {
                 width: double.infinity,
                 child: OutlinedButton.icon(
                   key: const ValueKey('add-yahoo-account'),
-                  onPressed: connecting == null && yahooEnabled
+                  onPressed:
+                      connecting == null &&
+                          _busyAccountIds.isEmpty &&
+                          yahooEnabled
                       ? () => _connect('yahoo')
                       : null,
                   icon: connecting == 'yahoo'
@@ -322,6 +346,7 @@ class _ConnectedAccountsScreenState extends State<ConnectedAccountsScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final arguments = ModalRoute.of(context)?.settings.arguments;
     return FutureBuilder<List<ConnectedEmailAccount>>(
       future: _accountsFuture,
       builder: (context, snapshot) {
@@ -330,22 +355,29 @@ class _ConnectedAccountsScreenState extends State<ConnectedAccountsScreen> {
             .where((account) => account.syncStatus != 'DISCONNECTED')
             .length;
         return AppPage(
+          header: AppHeader(
+            title: 'Manage Accounts',
+            showBack:
+                arguments is ConnectedAccountsArguments && arguments.addMailbox,
+            action: IconButton(
+              tooltip: 'Refresh accounts',
+              onPressed: _refresh,
+              icon: const Icon(Icons.refresh_rounded, size: 20),
+            ),
+          ),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              AppHeader(
-                title: 'Manage Accounts',
-                subtitle: 'Connect, switch, scan, or disconnect your mailboxes',
-                showBack: true,
-                action: IconButton.filledTonal(
-                  tooltip: 'Refresh accounts',
-                  onPressed: _refresh,
-                  icon: const Icon(Icons.refresh_rounded, size: 20),
-                ),
-              ),
               SizedBox(height: context.gap(22)),
-              _addAccountsCard(context),
-              SizedBox(height: context.gap(24)),
+              ExpansionTile(
+                key: const ValueKey('add-mailbox-section'),
+                initiallyExpanded: _openAddMailbox,
+                tilePadding: EdgeInsets.zero,
+                leading: const Icon(Icons.add_rounded),
+                title: const Text('Add another mailbox'),
+                children: [_addAccountsCard(context)],
+              ),
+              SizedBox(height: context.gap(12)),
               SectionTitle(
                 title: 'Connected Accounts',
                 actionLabel: accounts.isEmpty
@@ -354,7 +386,7 @@ class _ConnectedAccountsScreenState extends State<ConnectedAccountsScreen> {
               ),
               const SizedBox(height: 6),
               Text(
-                'Your current mailbox controls account status and default actions. Inbox insights remain unified across all connected mailboxes.',
+                'Choose a mailbox to see its messages and senders. Switch anytime from your profile menu.',
                 style: Theme.of(context).textTheme.bodySmall,
               ),
               const SizedBox(height: 14),
@@ -408,17 +440,19 @@ class _ConnectedAccountsScreenState extends State<ConnectedAccountsScreen> {
                                         ).colorScheme.primary,
                                       ),
                                       const SizedBox(width: 5),
-                                      Text(
-                                        'Current mailbox',
-                                        style: Theme.of(context)
-                                            .textTheme
-                                            .labelMedium
-                                            ?.copyWith(
-                                              color: Theme.of(
-                                                context,
-                                              ).colorScheme.primary,
-                                              fontWeight: FontWeight.w700,
-                                            ),
+                                      Flexible(
+                                        child: Text(
+                                          'Current mailbox',
+                                          style: Theme.of(context)
+                                              .textTheme
+                                              .labelMedium
+                                              ?.copyWith(
+                                                color: Theme.of(
+                                                  context,
+                                                ).colorScheme.primary,
+                                                fontWeight: FontWeight.w700,
+                                              ),
+                                        ),
                                       ),
                                     ],
                                   ),
@@ -428,10 +462,13 @@ class _ConnectedAccountsScreenState extends State<ConnectedAccountsScreen> {
                                   account.emailAddress,
                                   style: Theme.of(context).textTheme.bodyMedium,
                                 ),
-                                if (account.syncStatus == 'PARTIAL') ...[
+                                if (account.syncStatus == 'PARTIAL' ||
+                                    (account.syncStatus == 'SYNCING' &&
+                                        !account.backfillComplete &&
+                                        account.backfillProcessed > 0)) ...[
                                   const SizedBox(height: 5),
                                   Text(
-                                    'Ready to use · older mail syncing in background · ${account.backfillProcessed} processed',
+                                    '${account.backfillProcessed} messages processed · syncing older mail',
                                     style: Theme.of(context).textTheme.bodySmall
                                         ?.copyWith(color: AppColors.primary),
                                   ),
@@ -439,11 +476,20 @@ class _ConnectedAccountsScreenState extends State<ConnectedAccountsScreen> {
                               ],
                             ),
                           ),
-                          StatusChip(
-                            label: _statusLabel(account.syncStatus),
-                            color: _statusColor(account.syncStatus),
-                          ),
                         ],
+                      ),
+                      const SizedBox(height: 10),
+                      StatusChip(
+                        label:
+                            account.hasScheduledRetry ||
+                                isMailboxRateLimited(account.lastSyncError)
+                            ? 'Sync paused'
+                            : _statusLabel(account.syncStatus),
+                        color:
+                            account.hasScheduledRetry ||
+                                isMailboxRateLimited(account.lastSyncError)
+                            ? Theme.of(context).colorScheme.primary
+                            : _statusColor(account.syncStatus),
                       ),
                       if (account.lastSyncError != null) ...[
                         const SizedBox(height: 14),
@@ -453,7 +499,9 @@ class _ConnectedAccountsScreenState extends State<ConnectedAccountsScreen> {
                           decoration: BoxDecoration(
                             color: AppColors.softFill(
                               context,
-                              AppColors.danger,
+                              account.needsReconnect
+                                  ? AppColors.danger
+                                  : Theme.of(context).colorScheme.primary,
                             ),
                             borderRadius: BorderRadius.circular(13),
                           ),
@@ -461,19 +509,25 @@ class _ConnectedAccountsScreenState extends State<ConnectedAccountsScreen> {
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
                               Icon(
-                                Icons.error_outline_rounded,
+                                account.needsReconnect
+                                    ? Icons.link_off_rounded
+                                    : Icons.schedule_rounded,
                                 size: 18,
-                                color: Theme.of(context).colorScheme.error,
+                                color: account.needsReconnect
+                                    ? Theme.of(context).colorScheme.error
+                                    : Theme.of(context).colorScheme.primary,
                               ),
                               const SizedBox(width: 9),
                               Expanded(
                                 child: Text(
-                                  account.lastSyncError!,
+                                  account.hasScheduledRetry
+                                      ? 'Sync will retry automatically. Your saved mail is available.'
+                                      : account.lastSyncError!,
                                   style: Theme.of(context).textTheme.bodySmall
                                       ?.copyWith(
                                         color: Theme.of(
                                           context,
-                                        ).colorScheme.error,
+                                        ).colorScheme.onSurface,
                                       ),
                                 ),
                               ),
@@ -497,7 +551,9 @@ class _ConnectedAccountsScreenState extends State<ConnectedAccountsScreen> {
                               account.syncStatus != 'DISCONNECTED')
                             TextButton.icon(
                               key: ValueKey('activate-account-${account.id}'),
-                              onPressed: _busyAccountIds.contains(account.id)
+                              onPressed:
+                                  (_busyAccountIds.isNotEmpty ||
+                                      _connectingProvider != null)
                                   ? null
                                   : () => _activate(account),
                               icon: const Icon(
@@ -509,7 +565,8 @@ class _ConnectedAccountsScreenState extends State<ConnectedAccountsScreen> {
                           TextButton.icon(
                             onPressed:
                                 account.syncStatus == 'DISCONNECTED' ||
-                                    _busyAccountIds.contains(account.id)
+                                    (_busyAccountIds.isNotEmpty ||
+                                        _connectingProvider != null)
                                 ? null
                                 : () => _disconnect(account),
                             style: TextButton.styleFrom(
@@ -520,26 +577,37 @@ class _ConnectedAccountsScreenState extends State<ConnectedAccountsScreen> {
                             icon: const Icon(Icons.link_off_rounded, size: 18),
                             label: const Text('Disconnect'),
                           ),
-                          if (account.recoveryAction == 'RECONNECT' ||
-                              account.recoveryAction == 'CONFIGURE_GOOGLE')
+                          if (account.recoveryAction != 'CONFIGURE_GOOGLE' &&
+                              account.recoveryAction != 'CONTACT_ADMIN' &&
+                              account.needsReconnect)
                             TextButton.icon(
-                              onPressed: _busyAccountIds.contains(account.id)
+                              onPressed:
+                                  (_busyAccountIds.isNotEmpty ||
+                                      _connectingProvider != null)
                                   ? null
                                   : () => _reconnect(account),
                               icon: const Icon(Icons.link_rounded, size: 18),
                               label: const Text('Reconnect'),
-                            )
-                          else
+                            ),
+                          if (!account.needsReconnect &&
+                              account.recoveryAction != 'CONFIGURE_GOOGLE' &&
+                              account.recoveryAction != 'CONTACT_ADMIN' &&
+                              account.syncStatus != 'DISCONNECTED')
                             TextButton.icon(
                               onPressed:
                                   _busyAccountIds.contains(account.id) ||
                                       account.syncStatus == 'PENDING' ||
                                       account.syncStatus == 'SYNCING' ||
-                                      account.syncStatus == 'PARTIAL'
+                                      account.syncStatus == 'PARTIAL' ||
+                                      account.hasScheduledRetry
                                   ? null
                                   : () => _queueSync(account),
                               icon: const Icon(Icons.sync_rounded, size: 18),
-                              label: const Text('Scan now'),
+                              label: Text(
+                                account.hasScheduledRetry
+                                    ? 'Retry scheduled'
+                                    : 'Scan now',
+                              ),
                             ),
                         ],
                       ),
@@ -572,40 +640,6 @@ class _ConnectedAccountsScreenState extends State<ConnectedAccountsScreen> {
                     ],
                   ),
                 ),
-              SizedBox(height: context.gap(12)),
-              AppCard(
-                padding: const EdgeInsets.all(16),
-                color: AppColors.softFill(context, AppColors.primary),
-                borderColor: AppColors.primary.withValues(alpha: 0.22),
-                child: Row(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    const IconBubble(
-                      icon: Icons.shield_outlined,
-                      size: 38,
-                      iconSize: 19,
-                      color: AppColors.primary,
-                    ),
-                    const SizedBox(width: 11),
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            'Your privacy matters',
-                            style: Theme.of(context).textTheme.titleSmall,
-                          ),
-                          const SizedBox(height: 4),
-                          Text(
-                            'Only the email access needed for analysis, organization, and cleanup is requested.',
-                            style: Theme.of(context).textTheme.bodySmall,
-                          ),
-                        ],
-                      ),
-                    ),
-                  ],
-                ),
-              ),
             ],
           ),
         );

@@ -67,6 +67,7 @@ describe("AuthService", () => {
     const url = new URL(result.authorizationUrl);
 
     expect(url.origin).toBe("https://accounts.google.com");
+    expect(url.searchParams.get("scope")?.split(" ")).toContain("profile");
     expect(url.searchParams.get("client_id")).toBe("google-client-id");
     expect(url.searchParams.get("access_type")).toBe("offline");
     expect(url.searchParams.get("prompt")).toBe("select_account");
@@ -602,5 +603,40 @@ describe("AuthService", () => {
       refreshTokenRevoked: true,
     });
     expect(prisma.appSession.updateMany).toHaveBeenCalledTimes(1);
+  });
+
+  it("revokes every active app session after a reported provider password change", async () => {
+    const auditCreate = jest.fn().mockResolvedValue({ id: "audit-1" });
+    const updateMany = jest.fn().mockResolvedValue({ count: 3 });
+    const prisma = {
+      appSession: { updateMany },
+      auditLog: { create: auditCreate },
+    } as unknown as PrismaService;
+    const sessionService = new AuthService(
+      new ConfigService({ auth: { refreshTokenDays: 90 } }),
+      new JwtService({ secret: "a-test-secret-that-is-long-enough" }),
+      prisma,
+      {} as GmailClient,
+      {} as TokenEncryptionService,
+      {} as InboxJobsService,
+    );
+
+    await expect(
+      sessionService.revokeSessionsAfterProviderPasswordChange("user-1"),
+    ).resolves.toEqual({ success: true, revokedSessions: 3 });
+    expect(updateMany).toHaveBeenCalledWith({
+      where: { userId: "user-1", revokedAt: null },
+      data: {
+        revokedAt: expect.any(Date),
+        revocationReason: "PROVIDER_PASSWORD_CHANGE_REPORTED",
+      },
+    });
+    expect(auditCreate).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        userId: "user-1",
+        action: "auth.provider_password_change_reported_sessions_revoked",
+        targetType: "AppSession",
+      }),
+    });
   });
 });

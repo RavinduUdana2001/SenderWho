@@ -1,0 +1,13 @@
+# Dependency security process - CASA 6.1.1
+
+Established 26 October 2026 for the application maintainer/release owner.
+
+1. Preserve exact dependency versions and integrity hashes in package-lock.json and pubspec.lock. Review Podfile.lock, plugin podspecs, Android settings/build scripts and Gradle releaseRuntimeClasspath for native dependencies. Record Flutter framework/engine commits and managed hosting runtime versions separately.
+2. Before each release and after dependency changes: run npm audit for production and all backend dependencies, query the locked hosted Pub versions against OSV, resolve the Android release graph and query its Maven versions, and map local iOS plugin pods to their actual Pub versions. Review new Swift/CocoaPods dependencies separately rather than assuming placeholder pod versions identify upstream releases.
+3. Existing .github/workflows/security.yml runs on pull requests, main pushes and a weekly schedule. It audits backend production and development dependencies, exports SBOMs and contains container checks. Configuration is not evidence that a workflow has run. Mobile OSV checks in the 26 October evidence were run locally; they are not claimed as an automated CI gate.
+4. Block release for unresolved high/critical findings. Upgrade within compatible ranges or replace/remove the component. Any proposed exception requires documented reachability, compensating controls, owner and expiry, plus assessor acceptance where required. Do not suppress findings merely to obtain a clean report.
+5. Triage moderate/low findings, monitor npm/GitHub/OSV and vendor advisories at the weekly review and before release, and prioritize available compatible fixes. Remove unused or unsupported components after confirming they are unnecessary.
+6. Verify builds and relevant tests after updates. Retain raw scan requests/responses, CVEs/GHSAs, CVSS vectors, exact fixed versions, release hash and scan timestamps. Regenerate SBOMs and inventories from the candidate release.
+7. Deploy the tested release and capture hosting release identity plus a fresh hosting vulnerability scan. Scan the actual runtime/container artifact when in scope; source lockfile scans do not establish OS or binary safety. Retain evidence for the assessment and subsequent releases.
+
+26 October local remediation: body-parser 2.4.0; multer 2.5.0 via a scoped NestJS override; mailparser 3.12.4; nodemailer 10.2.1; fast-uri 3.1.9; Kotlin Gradle plugin 2.4.21 and the current compilerOptions JVM target DSL. Fresh npm and OSV results are recorded in the assessment evidence bundle. Production deployment is not established by these source changes.

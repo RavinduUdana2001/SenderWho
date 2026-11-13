@@ -13,6 +13,7 @@ import {
   googleProviderTokenContext,
 } from "../common/security/token-encryption.service";
 import { getEmailAccountRecoveryAction } from "../providers/google-account-recovery";
+import { queuedScanRetries, scanJobId } from "../jobs/scan-retry-status";
 
 @Injectable()
 export class EmailAccountsService {
@@ -93,9 +94,16 @@ export class EmailAccountsService {
       }
     }
 
+    const retries = await queuedScanRetries(
+      this.prisma,
+      accounts
+        .filter((account) => account.syncStatus === "FAILED")
+        .map((account) => account.id),
+    );
     return {
       items: accounts.map(({ isPrimary, ...account }) => ({
         ...account,
+        syncRetryAt: retries.get(scanJobId(account.id)) ?? null,
         isActive: isPrimary,
         recoveryAction: getEmailAccountRecoveryAction(
           account.provider,
@@ -174,6 +182,18 @@ export class EmailAccountsService {
       throw new BadRequestException(
         `Reconnect this ${providerName} account before starting a scan.`,
       );
+    }
+    if (account.syncStatus === SyncStatus.FAILED) {
+      const retries = await queuedScanRetries(this.prisma, [account.id]);
+      const syncRetryAt = retries.get(scanJobId(account.id));
+      if (syncRetryAt)
+        return {
+          emailAccountId: account.id,
+          queue: "scan-inbox",
+          jobId: scanJobId(account.id),
+          status: "QUEUED" as const,
+          syncRetryAt,
+        };
     }
     await this.prisma.emailAccount.update({
       where: { id: account.id },

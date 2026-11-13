@@ -1,3 +1,4 @@
+import { mailboxScope } from "../common/mailbox-scope";
 import { Injectable, Logger, NotFoundException } from "@nestjs/common";
 import { mockAlerts } from "../common/mock/senderwho.mock";
 import { PrismaService } from "../database/prisma.service";
@@ -25,7 +26,7 @@ export class SecurityAlertsService {
       };
     }
 
-    const where = { userId, status: "OPEN" as const };
+    const where = { ...mailboxScope(userId), status: "OPEN" as const };
     const [total, alerts] = await Promise.all([
       this.prisma.securityAlert.count({ where }),
       this.prisma.securityAlert.findMany({

@@ -95,3 +95,37 @@ describe("SearchService", () => {
     expect(result.hasMore).toBe(false);
   });
 });
+
+describe("message-constrained sender search", () => {
+  it.each([
+    { unreadOnly: true, hasAttachments: false },
+    { unreadOnly: false, hasAttachments: true },
+    { unreadOnly: true, hasAttachments: true },
+  ])("requires a matching sender message for %j", async (flags) => {
+    const senderFind = jest.fn().mockResolvedValue([]);
+    const messageFind = jest.fn().mockResolvedValue([]);
+    const service = new SearchService({
+      sender: { findMany: senderFind, count: jest.fn().mockResolvedValue(0) },
+      message: { findMany: messageFind, count: jest.fn().mockResolvedValue(0) },
+    } as never);
+    await service.search("owner", {
+      ...flags,
+      selected: ["Finance", "This Month"],
+      query: "invoice",
+      page: 1,
+      limit: 25,
+    });
+    const messageWhere = messageFind.mock.calls[0][0].where;
+    expect(senderFind.mock.calls[0][0].where.messages).toEqual({
+      some: messageWhere,
+    });
+    expect(messageWhere).toMatchObject({
+      userId: "owner",
+      isTrashed: false,
+      category: { in: ["FINANCE"] },
+      receivedAt: { gte: expect.any(Date) },
+    });
+    if (flags.unreadOnly) expect(messageWhere.isRead).toBe(false);
+    if (flags.hasAttachments) expect(messageWhere.hasAttachments).toBe(true);
+  });
+});

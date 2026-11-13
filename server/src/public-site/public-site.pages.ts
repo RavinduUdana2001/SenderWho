@@ -473,24 +473,37 @@ function list(items: string[]): string {
   return `<ul>${items.map((item) => `<li>${item}</li>`).join("")}</ul>`;
 }
 
+// A single mailbox only: no mail headers, query, fragment or caller-selected scheme.
+export function supportMailto(value: string): string | undefined {
+  if (
+    !/^[A-Za-z0-9.!$%&'*+_\-=^`{|}~]+@[A-Za-z0-9](?:[A-Za-z0-9.-]*[A-Za-z0-9])?$/.test(
+      value,
+    )
+  ) {
+    return undefined;
+  }
+  const [local, domain] = value.split("@");
+  return `mailto:${encodeURIComponent(local).replace(/'/g, "%27")}@${domain}`;
+}
+
 function contactBlock(details: PublicSiteDetails): string {
-  if (!details.supportEmail) {
+  const mailto = supportMailto(details.supportEmail);
+  if (!mailto) {
     return `<p><strong>Contact:</strong> Visit <a href="/support">SenderWho Support</a>.</p>`;
   }
   const email = escapeHtml(details.supportEmail);
-  return `<p><strong>Contact:</strong> <a href="mailto:${email}">${email}</a></p>`;
+  return `<p><strong>Contact:</strong> <a href="${escapeHtml(mailto)}">${email}</a></p>`;
 }
 
 function contactAction(
   details: PublicSiteDetails,
   label = "Email support",
 ): string {
-  if (!details.supportEmail) {
+  const mailto = supportMailto(details.supportEmail);
+  if (!mailto) {
     return `<a class="button secondary disabled" href="/support" aria-disabled="true">Support email coming soon</a>`;
   }
-  return `<a class="button primary" href="mailto:${escapeHtml(
-    details.supportEmail,
-  )}">${escapeHtml(label)}</a>`;
+  return `<a class="button primary" href="${escapeHtml(mailto)}">${escapeHtml(label)}</a>`;
 }
 
 function formatDate(value: string): string {

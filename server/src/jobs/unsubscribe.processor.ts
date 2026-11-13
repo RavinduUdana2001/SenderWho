@@ -43,6 +43,7 @@ export class UnsubscribeProcessor {
   constructor(private readonly prisma: PrismaService) {}
 
   async process(job: ProcessorJob<{ unsubscribeJobId: string }>) {
+    job.signal?.throwIfAborted();
     const unsubscribeJob = await this.prisma.unsubscribeJob.findUniqueOrThrow({
       where: { id: job.data.unsubscribeJobId },
     });
@@ -120,6 +121,7 @@ export class UnsubscribeProcessor {
     }
 
     try {
+      job.signal?.throwIfAborted();
       const providerStatus = await this.postOneClick(
         unsubscribeJob.unsubscribeUrl,
       );

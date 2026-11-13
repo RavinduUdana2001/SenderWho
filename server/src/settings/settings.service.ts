@@ -1,3 +1,4 @@
+import { mailboxScope } from "../common/mailbox-scope";
 import { Injectable, Logger } from "@nestjs/common";
 import { PrismaService } from "../database/prisma.service";
 import { UpdatePreferencesDto } from "./dto/update-preferences.dto";
@@ -21,10 +22,14 @@ export class SettingsService {
         where: { userId, syncStatus: { not: "DISCONNECTED" } },
       }),
       this.prisma.message.count({
-        where: { userId, isArchived: true, isTrashed: false },
+        where: { ...mailboxScope(userId), isArchived: true, isTrashed: false },
       }),
-      this.prisma.message.count({ where: { userId, isTrashed: true } }),
-      this.prisma.sender.count({ where: { userId, isBlocked: true } }),
+      this.prisma.message.count({
+        where: { ...mailboxScope(userId), isTrashed: true },
+      }),
+      this.prisma.sender.count({
+        where: { ...mailboxScope(userId), isBlocked: true },
+      }),
     ]);
 
     return {
@@ -71,8 +76,12 @@ export class SettingsService {
     const [settings, blockedSenders, trustedSenders, activeSessions] =
       await Promise.all([
         this.ensureSettings(userId),
-        this.prisma.sender.count({ where: { userId, isBlocked: true } }),
-        this.prisma.sender.count({ where: { userId, isTrusted: true } }),
+        this.prisma.sender.count({
+          where: { ...mailboxScope(userId), isBlocked: true },
+        }),
+        this.prisma.sender.count({
+          where: { ...mailboxScope(userId), isTrusted: true },
+        }),
         this.prisma.appSession.count({
           where: { userId, revokedAt: null, expiresAt: { gt: new Date() } },
         }),

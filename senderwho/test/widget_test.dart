@@ -38,7 +38,6 @@ import 'package:sender_who/theme/app_semantic_colors.dart';
 import 'package:sender_who/theme/app_theme.dart';
 import 'package:sender_who/theme/theme_mode_controller.dart';
 import 'package:sender_who/theme/theme_preference_store.dart';
-import 'package:sender_who/widgets/app_card.dart';
 import 'package:sender_who/widgets/search_box.dart';
 import 'package:sender_who/widgets/sender_drawer.dart';
 import 'package:sender_who/widgets/section_title.dart';
@@ -144,8 +143,10 @@ void main() {
   Future<void> setScreenSize(WidgetTester tester, Size size) async {
     await tester.binding.setSurfaceSize(size);
     tester.view.devicePixelRatio = 1;
+    tester.view.physicalSize = size;
     addTearDown(() async {
       tester.view.resetDevicePixelRatio();
+      tester.view.resetPhysicalSize();
       await tester.binding.setSurfaceSize(null);
     });
   }
@@ -173,21 +174,24 @@ void main() {
     await tester.tap(find.text(providerActionLabel));
     await tester.pumpAndSettle();
 
-    expect(find.text('Dashboard'), findsOneWidget);
-    expect(find.text('INBOX HEALTH'), findsOneWidget);
+    await tester.pump(const Duration(seconds: 3));
+    await tester.pump(const Duration(seconds: 3));
+    await tester.pumpAndSettle();
+    expect(find.text('All Senders'), findsOneWidget);
+    expect(find.byType(AllSendersScreen), findsOneWidget);
   });
 
-  testWidgets('First launch defaults to light mode on a dark device', (
+  testWidgets('First launch defaults to dark mode on a light device', (
     tester,
   ) async {
-    tester.platformDispatcher.platformBrightnessTestValue = Brightness.dark;
+    tester.platformDispatcher.platformBrightnessTestValue = Brightness.light;
     addTearDown(tester.platformDispatcher.clearPlatformBrightnessTestValue);
 
     await tester.pumpWidget(const SenderWhoApp());
 
     expect(
       Theme.of(tester.element(find.byType(Scaffold).first)).brightness,
-      Brightness.light,
+      Brightness.dark,
     );
   });
 
@@ -216,8 +220,8 @@ void main() {
       MaterialApp(
         theme: AppTheme.light(),
         routes: {
-          DashboardScreen.routeName: (_) =>
-              const Scaffold(body: Text('Dashboard')),
+          AllSendersScreen.routeName: (_) =>
+              const Scaffold(body: Text('All Senders')),
         },
         home: ConnectEmailScreen(
           availableProviders: () async => const {
@@ -238,7 +242,7 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(requestedProvider, 'yahoo');
-    expect(find.text('Dashboard'), findsOneWidget);
+    expect(find.text('All Senders'), findsOneWidget);
     expect(find.text('Generated app password'), findsNothing);
   });
 
@@ -251,8 +255,8 @@ void main() {
       MaterialApp(
         theme: AppTheme.light(),
         routes: {
-          DashboardScreen.routeName: (_) =>
-              const Scaffold(body: Text('Dashboard')),
+          AllSendersScreen.routeName: (_) =>
+              const Scaffold(body: Text('All Senders')),
         },
         home: ConnectEmailScreen(
           availableProviders: () async => const {
@@ -273,7 +277,7 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(requestedProvider, 'microsoft');
-    expect(find.text('Dashboard'), findsOneWidget);
+    expect(find.text('All Senders'), findsOneWidget);
   });
 
   testWidgets('remembered Microsoft account keeps its provider identity', (
@@ -285,8 +289,8 @@ void main() {
       MaterialApp(
         theme: AppTheme.light(),
         routes: {
-          DashboardScreen.routeName: (_) =>
-              const Scaffold(body: Text('Dashboard')),
+          AllSendersScreen.routeName: (_) =>
+              const Scaffold(body: Text('All Senders')),
         },
         home: ConnectEmailScreen(
           availableProviders: () async => const {
@@ -314,7 +318,7 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(requestedProvider, 'microsoft');
-    expect(find.text('Dashboard'), findsOneWidget);
+    expect(find.text('All Senders'), findsOneWidget);
   });
 
   testWidgets('Yahoo stays hidden until production mailbox access is enabled', (
@@ -336,7 +340,7 @@ void main() {
 
     expect(find.text('Continue with Google'), findsOneWidget);
     expect(find.text('Continue with Yahoo'), findsNothing);
-    expect(find.textContaining('Securely connect Gmail to'), findsOneWidget);
+    expect(find.text('Sign in or create your account.'), findsOneWidget);
   });
 
   testWidgets('Entry screens stay centered on a tall phone', (tester) async {
@@ -347,9 +351,14 @@ void main() {
         .getRect(find.byKey(const ValueKey('onboarding-brand-icon')))
         .top;
     final onboardingBottom = tester
-        .getRect(find.text('Private by design. You remain in control.'))
+        .getRect(find.text('Private by design.'))
         .bottom;
-    expect((onboardingTop + onboardingBottom) / 2, closeTo(932 / 2, 55));
+    expect(onboardingTop, greaterThan(80));
+    expect(onboardingBottom, lessThanOrEqualTo(932));
+    expect(
+      tester.getRect(find.text('Connect my inbox')).top,
+      greaterThan(932 * .75),
+    );
 
     await tester.tap(find.text('Connect my inbox'));
     await tester.pumpAndSettle();
@@ -361,18 +370,59 @@ void main() {
         .getRect(find.byKey(const ValueKey('connect-brand-icon')))
         .top;
     final connectBottom = tester.getRect(find.text('Terms of Service')).bottom;
-    expect((connectTop + connectBottom) / 2, closeTo(932 / 2, 55));
+    expect(connectTop, greaterThan(backTop + 48));
+    expect(connectBottom, lessThanOrEqualTo(932));
 
     final providerCard = tester.getRect(
       find
           .ancestor(
             of: find.text(providerActionLabel),
-            matching: find.byType(AppCard),
+            matching: find.byType(OutlinedButton),
           )
           .first,
     );
     expect(providerCard.width, lessThanOrEqualTo(420));
     expect(providerCard.center.dx, closeTo(430 / 2, 1));
+  });
+
+  testWidgets('connect screen keeps the back action fixed while scrolling', (
+    tester,
+  ) async {
+    await setScreenSize(tester, const Size(390, 360));
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: AppTheme.light(),
+        home: ConnectEmailScreen(
+          availableProviders: () async => const {
+            'google': true,
+            'microsoft': true,
+            'yahoo': false,
+          },
+          loadRememberedEmail: () async => null,
+          loadRememberedProvider: () async => null,
+          startOAuth: (_) async => false,
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    final backBefore = tester.getRect(find.byTooltip('Back')).top;
+    final brandBefore = tester
+        .getRect(find.byKey(const ValueKey('connect-brand-icon')))
+        .top;
+
+    await tester.drag(
+      find.byType(SingleChildScrollView),
+      const Offset(0, -320),
+    );
+    await tester.pumpAndSettle();
+
+    final backAfter = tester.getRect(find.byTooltip('Back')).top;
+    final brandAfter = tester
+        .getRect(find.byKey(const ValueKey('connect-brand-icon')))
+        .top;
+    expect(backAfter, closeTo(backBefore, 0.1));
+    expect(brandAfter, lessThan(brandBefore - 100));
   });
 
   testWidgets('Onboarding brand is prominent and hero copy is centered', (
@@ -383,19 +433,15 @@ void main() {
 
     expect(
       tester.getSize(find.byKey(const ValueKey('onboarding-brand-icon'))),
-      const Size(168, 168),
+      const Size(112, 112),
     );
-    final hero = tester.widget<RichText>(
+    final hero = tester.widget<Text>(
       find.byKey(const ValueKey('onboarding-hero-title')),
     );
     expect(hero.textAlign, TextAlign.center);
-
-    final subtitle = tester.widget<Text>(
-      find.text(
-        'Know who is emailing you, clean inbox clutter, and stay protected from risky senders.',
-      ),
-    );
-    expect(subtitle.textAlign, TextAlign.center);
+    expect(hero.data, 'Know your senders.\nLove your inbox.');
+    expect(find.text('True sender detection'), findsNothing);
+    expect(find.text('Connect my inbox'), findsOneWidget);
   });
 
   testWidgets('Google sign-in failures render an inline recovery state', (
@@ -572,32 +618,22 @@ void main() {
     await tester.tap(find.text(providerActionLabel));
     await tester.pumpAndSettle();
 
-    expect(find.text('Dashboard'), findsOneWidget);
-    expect(find.text('INBOX HEALTH'), findsOneWidget);
+    expect(find.text('All Senders'), findsOneWidget);
+    expect(find.byType(AllSendersScreen), findsOneWidget);
   });
 
-  testWidgets('Dashboard title remains centered between its actions', (
-    tester,
-  ) async {
+  testWidgets('Dashboard uses the shared simple header', (tester) async {
     await setScreenSize(tester, const Size(390, 844));
     await tester.pumpWidget(const SenderWhoApp());
-
     final navigator = tester.state<NavigatorState>(find.byType(Navigator));
     navigator.pushNamed(DashboardScreen.routeName);
     await tester.pumpAndSettle();
-
-    expect(
-      tester.getCenter(find.text('Dashboard').first).dx,
-      closeTo(390 / 2, 1),
-    );
-    expect(
-      find.byKey(const ValueKey('dashboard-header-title')),
-      findsOneWidget,
-    );
-    expect(find.byKey(const ValueKey('app-header-subtitle')), findsNothing);
+    expect(find.byKey(const ValueKey('app-header-title')), findsOneWidget);
+    expect(find.byTooltip('Back'), findsNothing);
+    expect(find.byTooltip('Refresh live results'), findsOneWidget);
   });
 
-  testWidgets('main destinations keep the hamburger when pushed', (
+  testWidgets('menu pages keep system Back without an app bar arrow', (
     tester,
   ) async {
     await setScreenSize(tester, const Size(390, 844));
@@ -610,8 +646,10 @@ void main() {
     navigator.pushNamed(SettingsScreen.routeName);
     await tester.pumpAndSettle();
 
-    expect(find.byTooltip('Open menu'), findsOneWidget);
     expect(find.byTooltip('Back'), findsNothing);
+    await tester.binding.handlePopRoute();
+    await tester.pumpAndSettle();
+    expect(find.text('All Senders'), findsOneWidget);
   });
 
   testWidgets('shared section headings inherit the application typography', (
@@ -1067,7 +1105,14 @@ void main() {
     await tester.pump(const Duration(seconds: 3));
     await tester.pump();
     expect(jobPolls, 1);
-    expect(find.text('Needs retry'), findsOneWidget);
+    expect(
+      tester
+          .widget<Text>(
+            find.byKey(const ValueKey('unsubscribe-status-sender-1')),
+          )
+          .data,
+      'Needs retry',
+    );
     expect(
       find.text('The provider could not complete this request. Please retry.'),
       findsOneWidget,
@@ -1082,9 +1127,9 @@ void main() {
             find.byKey(const ValueKey('unsubscribe-actionable-count')),
           )
           .data,
-      '1',
+      '1 subscription',
     );
-    expect(find.text('Unsubscribe from All (1)'), findsOneWidget);
+    expect(find.byKey(const ValueKey('unsubscribe-page-menu')), findsOneWidget);
 
     await tester.tap(find.byKey(const ValueKey('unsubscribe-retry-sender-1')));
     await tester.pumpAndSettle();
@@ -1161,6 +1206,8 @@ void main() {
       );
       await tester.pumpAndSettle();
 
+      await tester.tap(find.byKey(const ValueKey('unsubscribe-more-sender-1')));
+      await tester.pumpAndSettle();
       await tester.tap(
         find.byKey(const ValueKey('trust-unsubscribe-sender-1')),
       );
@@ -1172,7 +1219,7 @@ void main() {
       expect(trustCalls, 1);
       expect(candidateLoads, 2);
       expect(find.text('Example Newsletter'), findsNothing);
-      expect(find.text('You are all caught up'), findsOneWidget);
+      expect(find.text('No subscriptions to review'), findsOneWidget);
       expect(
         find.textContaining('is now trusted and was removed'),
         findsOneWidget,
@@ -1339,8 +1386,9 @@ void main() {
       ),
     );
     await tester.pumpAndSettle();
-    await tester.ensureVisible(find.text('Unsubscribe from All (2)'));
-    await tester.tap(find.text('Unsubscribe from All (2)'));
+    await tester.tap(find.byKey(const ValueKey('unsubscribe-page-menu')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('unsubscribe-all-shown')));
     await tester.pumpAndSettle();
     await tester.tap(find.widgetWithText(FilledButton, 'Unsubscribe'));
     await tester.pumpAndSettle();
@@ -1376,80 +1424,92 @@ void main() {
     expect(find.text('Sender Details'), findsOneWidget);
   });
 
-  testWidgets('Sender Details presents a polished readable profile', (
-    tester,
-  ) async {
-    // Matches the logical size of the iPhone 17 simulator capture that
-    // originally exposed the truncated two-column action label.
-    await setScreenSize(tester, const Size(471, 1024));
-    final repository = SenderWhoRepository(
-      previewMode: false,
-      client: MockClient((request) async {
-        expect(request.method, 'GET');
-        expect(request.url.path, '/api/v1/senders/sender-1');
-        return http.Response(
-          jsonEncode({
-            'id': 'sender-1',
-            'name': 'Hasintha Nagodavithana',
-            'email': 'invitations@linkedin.com',
-            'category': 'SOCIAL',
-            'score': 80,
-            'initial': 'H',
-            'colorKey': 'primary',
-            'totalMessages': 143,
-            'unreadMessages': 12,
-            'isTrusted': false,
-            'isBlocked': false,
-            'firstSeenAt': '2024-11-27T17:37:12.000Z',
-            'location': 'Unknown',
-            'type': 'SOCIAL',
-            'messages': <Object>[],
-          }),
-          200,
-        );
-      }),
-      sessionStore: MemorySessionStore(),
-      baseUrl: 'https://api.example.test/api/v1',
-    );
-
-    await tester.pumpWidget(
-      MaterialApp(
-        theme: AppTheme.light(),
-        home: SenderDetailsScreen(repository: repository, senderId: 'sender-1'),
-      ),
-    );
-    await tester.pumpAndSettle();
-
-    expect(find.text('Hasintha Nagodavithana'), findsOneWidget);
-    expect(find.text('80 / 100'), findsOneWidget);
-    expect(find.text('High trust'), findsOneWidget);
-    expect(find.text('Unable to verify sender'), findsOneWidget);
-    expect(find.text('Unsubscribe'), findsOneWidget);
-    expect(find.text('Delete all emails'), findsOneWidget);
-    expect(find.text('Nov 27, 2024'), findsOneWidget);
-    expect(find.text('Social'), findsNWidgets(2));
-    expect(find.textContaining('2024-11-27T'), findsNothing);
-    expect(find.text('Messages'), findsOneWidget);
-    expect(find.text('View all 143'), findsOneWidget);
-
-    for (final label in [
-      'Trust sender',
-      'Block sender',
-      'Unsubscribe',
-      'Delete all emails',
-    ]) {
-      final paragraph = tester.renderObject<RenderParagraph>(find.text(label));
-      expect(
-        paragraph.didExceedMaxLines,
-        isFalse,
-        reason: '$label must remain fully visible in the action grid.',
+  testWidgets(
+    'Sender Details prioritizes messages and expands extra information',
+    (tester) async {
+      // Matches the logical size of the iPhone 17 simulator capture that
+      // originally exposed the truncated two-column action label.
+      await setScreenSize(tester, const Size(471, 1024));
+      final repository = SenderWhoRepository(
+        previewMode: false,
+        client: MockClient((request) async {
+          expect(request.method, 'GET');
+          expect(request.url.path, '/api/v1/senders/sender-1');
+          return http.Response(
+            jsonEncode({
+              'id': 'sender-1',
+              'name': 'Hasintha Nagodavithana',
+              'email': 'invitations@linkedin.com',
+              'category': 'SOCIAL',
+              'score': 80,
+              'initial': 'H',
+              'colorKey': 'primary',
+              'totalMessages': 143,
+              'unreadMessages': 12,
+              'isTrusted': false,
+              'isBlocked': false,
+              'firstSeenAt': '2024-11-27T17:37:12.000Z',
+              'location': 'Unknown',
+              'type': 'SOCIAL',
+              'messages': <Object>[],
+            }),
+            200,
+          );
+        }),
+        sessionStore: MemorySessionStore(),
+        baseUrl: 'https://api.example.test/api/v1',
       );
-    }
 
-    final senderName = tester.widget<Text>(find.text('Hasintha Nagodavithana'));
-    final header = tester.widget<Text>(find.text('Sender Details'));
-    expect(senderName.style?.fontFamily, header.style?.fontFamily);
-  });
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: AppTheme.light(),
+          home: SenderDetailsScreen(
+            repository: repository,
+            senderId: 'sender-1',
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(find.text('Hasintha Nagodavithana'), findsOneWidget);
+      expect(find.text('80 / 100'), findsNothing);
+      expect(find.text('Unable to verify sender'), findsOneWidget);
+      expect(find.text('Unsubscribe'), findsOneWidget);
+      expect(find.text('Move all to Trash'), findsOneWidget);
+      expect(find.text('Nov 27, 2024'), findsNothing);
+      expect(find.textContaining('2024-11-27T'), findsNothing);
+      expect(find.text('Messages'), findsOneWidget);
+      expect(find.text('View all 143'), findsOneWidget);
+      await tester.ensureVisible(find.text('About this sender'));
+      await tester.tap(find.text('About this sender'));
+      await tester.pumpAndSettle();
+      expect(find.text('Nov 27, 2024'), findsOneWidget);
+      expect(find.text('80 / 100'), findsOneWidget);
+      expect(find.text('Social'), findsOneWidget);
+
+      for (final label in [
+        'Trust sender',
+        'Block sender',
+        'Unsubscribe',
+        'Move all to Trash',
+      ]) {
+        final paragraph = tester.renderObject<RenderParagraph>(
+          find.text(label),
+        );
+        expect(
+          paragraph.didExceedMaxLines,
+          isFalse,
+          reason: '$label must remain fully visible in the action grid.',
+        );
+      }
+
+      final senderName = tester.widget<Text>(
+        find.text('Hasintha Nagodavithana'),
+      );
+      final header = tester.widget<Text>(find.text('Sender Details'));
+      expect(senderName.style?.fontFamily, header.style?.fontFamily);
+    },
+  );
 
   testWidgets('Top sender details can persist a trusted sender', (
     tester,
@@ -1602,7 +1662,7 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.byTooltip('Back'), findsOneWidget);
-    expect(find.byTooltip('Open menu'), findsNothing);
+    expect(find.byTooltip('Open menu'), findsOneWidget);
     expect(find.text('Message'), findsOneWidget);
     expect(find.text('Open this message'), findsWidgets);
     expect(find.text('This is the complete Gmail body.'), findsOneWidget);
@@ -1690,7 +1750,7 @@ void main() {
 
       await tester.binding.handlePopRoute();
       await tester.pumpAndSettle();
-      expect(find.text('Select'), findsOneWidget);
+      expect(find.byTooltip('Select'), findsOneWidget);
       expect(find.textContaining('selected'), findsNothing);
     },
   );
@@ -1763,11 +1823,13 @@ void main() {
       ),
     );
     await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('app-header-title')));
+    await tester.pumpAndSettle();
     await tester.ensureVisible(find.text('Archived'));
     await tester.pumpAndSettle();
     await tester.tap(find.text('Archived'));
     await tester.pumpAndSettle();
-    await tester.tap(find.text('Select'));
+    await tester.tap(find.byTooltip('Select'));
     await tester.pump();
     await tester.tap(find.byKey(const ValueKey('email-row-message-archived')));
     await tester.pump();
@@ -1889,8 +1951,15 @@ void main() {
       final errorRect = tester.getRect(
         find.byKey(const ValueKey('all-senders-error-state')),
       );
+      await tester.tap(find.byTooltip('Search senders'));
+      await tester.pumpAndSettle();
       final searchRect = tester.getRect(find.byType(SearchBox));
-      expect(find.text('Could not load senders.'), findsOneWidget);
+      expect(
+        find.text(
+          'SenderWho is temporarily unavailable. Please try again shortly.',
+        ),
+        findsOneWidget,
+      );
       expect(errorRect.width, closeTo(searchRect.width, 0.1));
       expect(errorRect.left, closeTo(searchRect.left, 0.1));
     },
@@ -1953,7 +2022,12 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(find.text('First Sender'), findsOneWidget);
-      expect(find.text('Could not load senders.'), findsOneWidget);
+      expect(
+        find.text(
+          'SenderWho is temporarily unavailable. Please try again shortly.',
+        ),
+        findsOneWidget,
+      );
       await tester.tap(find.text('Retry'));
       await tester.pumpAndSettle();
 
@@ -2010,7 +2084,7 @@ void main() {
     expect(query?['category'], 'PROMOTIONS');
     expect(find.text('Review Promotions'), findsOneWidget);
     expect(find.text('Promotion to review'), findsOneWidget);
-    expect(find.text('Select'), findsOneWidget);
+    expect(find.byTooltip('Select'), findsOneWidget);
   });
 
   testWidgets('Partial bulk failure keeps only failed messages selected', (
@@ -2097,7 +2171,7 @@ void main() {
       ),
     );
     await tester.pumpAndSettle();
-    await tester.tap(find.text('Select'));
+    await tester.tap(find.byTooltip('Select'));
     await tester.pump();
     await tester.tap(find.byKey(const ValueKey('email-row-message-1')));
     await tester.tap(find.byKey(const ValueKey('email-row-message-2')));
@@ -2224,7 +2298,12 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(archived, isTrue);
-    expect(changed, isTrue);
+    expect(
+      changed,
+      isNull,
+      reason:
+          'Native Back does not require an explicit result; the mailbox refreshes on return.',
+    );
     expect(find.text('Inbox host'), findsOneWidget);
   });
 
@@ -2268,6 +2347,11 @@ void main() {
     expect(find.text('Block'), findsOneWidget);
     expect(find.text('Resolve'), findsOneWidget);
     expect(find.text('Dismiss alert'), findsOneWidget);
+    await tester.ensureVisible(
+      find.byKey(const ValueKey('alert-technical-details')),
+    );
+    await tester.tap(find.byKey(const ValueKey('alert-technical-details')));
+    await tester.pumpAndSettle();
     expect(find.text('Claimed identity'), findsOneWidget);
     expect(find.text('Google'), findsOneWidget);
     expect(find.text('85/100'), findsOneWidget);
@@ -2331,11 +2415,10 @@ void main() {
       ),
     );
 
-    expect(find.byIcon(Icons.gpp_good_rounded), findsOneWidget);
     expect(find.byIcon(Icons.warning_amber_rounded), findsOneWidget);
-    expect(find.byIcon(Icons.question_mark_rounded), findsOneWidget);
-    expect(find.text('Trusted by you'), findsOneWidget);
-    expect(find.text('Possible impersonation'), findsOneWidget);
+    expect(find.byTooltip('Verified sender identity'), findsOneWidget);
+    expect(find.byTooltip('Possible sender impersonation'), findsOneWidget);
+    expect(find.byTooltip('Sender identity is unverified'), findsOneWidget);
   });
 
   testWidgets('Security alerts paginate without losing reviewed rows', (
@@ -2386,7 +2469,7 @@ void main() {
       ),
     );
     await tester.pumpAndSettle();
-    expect(find.text('2 alerts need review'), findsOneWidget);
+    expect(find.text('2 alerts to review'), findsOneWidget);
     await tester.ensureVisible(find.text('Load more'));
     await tester.tap(find.text('Load more'));
     await tester.pumpAndSettle();
@@ -2537,94 +2620,94 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    expect(find.text('Security notifications'), findsOneWidget);
-    expect(find.byType(Switch), findsWidgets);
-  });
-
-  testWidgets('Settings saves notifications, scan frequency, and theme', (
-    tester,
-  ) async {
-    await setScreenSize(tester, const Size(390, 844));
-    var preferences = <String, Object?>{
-      'notificationsEnabled': true,
-      'inboxScanFrequency': 'Auto',
-      'theme': 'System',
-    };
-    final updates = <Map<String, dynamic>>[];
-    ThemeMode? selectedThemeMode;
-    Map<String, dynamic> responseBody() => {
-      'account': {'connectedAccountsCount': 1},
-      'preferences': preferences,
-      'emailManagement': {
-        'archivedEmails': 2,
-        'trashEmails': 1,
-        'blockedSenders': 3,
-      },
-    };
-
-    final repository = SenderWhoRepository(
-      previewMode: false,
-      client: MockClient((request) async {
-        if (request.method == 'GET' && request.url.path == '/api/v1/settings') {
-          return http.Response(jsonEncode(responseBody()), 200);
-        }
-        if (request.method == 'PATCH' &&
-            request.url.path == '/api/v1/settings/preferences') {
-          final update = (jsonDecode(request.body) as Map)
-              .cast<String, dynamic>();
-          updates.add(update);
-          preferences = {...preferences, ...update};
-          return http.Response(jsonEncode(responseBody()), 200);
-        }
-        return http.Response('Not found', 404);
-      }),
-      sessionStore: MemorySessionStore(),
-      baseUrl: 'https://api.example.test/api/v1',
-    );
-
-    await tester.pumpWidget(
-      ThemeModeController(
-        mode: ThemeMode.light,
-        setThemeMode: (mode) => selectedThemeMode = mode,
-        child: MaterialApp(
-          theme: AppTheme.light(),
-          home: SettingsScreen(repository: repository),
-        ),
-      ),
-    );
-    await tester.pumpAndSettle();
-
-    await tester.tap(find.byType(Switch));
-    await tester.pumpAndSettle();
-    expect(updates.last, {'notificationsEnabled': false});
-    expect(tester.widget<Switch>(find.byType(Switch)).value, isFalse);
-
-    await tester.tap(
-      find.byKey(const ValueKey('settings-security-notifications')),
-    );
-    await tester.pumpAndSettle();
-    expect(updates.last, {'notificationsEnabled': true});
-    expect(tester.widget<Switch>(find.byType(Switch)).value, isTrue);
-
-    await tester.ensureVisible(
+    expect(find.text('Security notifications'), findsNothing);
+    expect(
       find.byKey(const ValueKey('settings-scan-frequency')),
+      findsOneWidget,
     );
-    await tester.tap(find.byKey(const ValueKey('settings-scan-frequency')));
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('Daily'));
-    await tester.pumpAndSettle();
-    expect(updates.last, {'inboxScanFrequency': 'Daily'});
-    expect(find.text('Daily'), findsOneWidget);
-
-    await tester.ensureVisible(find.byKey(const ValueKey('settings-theme')));
-    await tester.tap(find.byKey(const ValueKey('settings-theme')));
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('Dark'));
-    await tester.pumpAndSettle();
-    expect(updates.last, {'theme': 'Dark'});
-    expect(selectedThemeMode, ThemeMode.dark);
-    expect(find.text('Dark'), findsOneWidget);
   });
+
+  testWidgets(
+    'Settings hides unsupported notifications and saves scan frequency and theme',
+    (tester) async {
+      await setScreenSize(tester, const Size(390, 844));
+      var preferences = <String, Object?>{
+        'notificationsEnabled': true,
+        'inboxScanFrequency': 'Auto',
+        'theme': 'System',
+      };
+      final updates = <Map<String, dynamic>>[];
+      ThemeMode? selectedThemeMode;
+      Map<String, dynamic> responseBody() => {
+        'account': {'connectedAccountsCount': 1},
+        'preferences': preferences,
+        'emailManagement': {
+          'archivedEmails': 2,
+          'trashEmails': 1,
+          'blockedSenders': 3,
+        },
+      };
+
+      final repository = SenderWhoRepository(
+        previewMode: false,
+        client: MockClient((request) async {
+          if (request.method == 'GET' &&
+              request.url.path == '/api/v1/settings') {
+            return http.Response(jsonEncode(responseBody()), 200);
+          }
+          if (request.method == 'PATCH' &&
+              request.url.path == '/api/v1/settings/preferences') {
+            final update = (jsonDecode(request.body) as Map)
+                .cast<String, dynamic>();
+            updates.add(update);
+            preferences = {...preferences, ...update};
+            return http.Response(jsonEncode(responseBody()), 200);
+          }
+          return http.Response('Not found', 404);
+        }),
+        sessionStore: MemorySessionStore(),
+        baseUrl: 'https://api.example.test/api/v1',
+      );
+
+      await tester.pumpWidget(
+        StatefulBuilder(
+          builder: (context, setThemeState) => ThemeModeController(
+            mode: selectedThemeMode ?? ThemeMode.light,
+            setThemeMode: (mode) =>
+                setThemeState(() => selectedThemeMode = mode),
+            child: MaterialApp(
+              theme: AppTheme.light(),
+              darkTheme: AppTheme.dark(),
+              themeMode: selectedThemeMode ?? ThemeMode.light,
+              home: SettingsScreen(repository: repository),
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(find.byType(Switch), findsNothing);
+
+      await tester.ensureVisible(
+        find.byKey(const ValueKey('settings-scan-frequency')),
+      );
+      await tester.tap(find.byKey(const ValueKey('settings-scan-frequency')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Daily'));
+      await tester.pumpAndSettle();
+      expect(updates.last, {'inboxScanFrequency': 'Daily'});
+      expect(find.text('Daily'), findsOneWidget);
+
+      await tester.ensureVisible(find.byKey(const ValueKey('settings-theme')));
+      await tester.tap(find.byKey(const ValueKey('settings-theme')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Dark'));
+      await tester.pumpAndSettle();
+      expect(updates.last, {'theme': 'Dark'});
+      expect(selectedThemeMode, ThemeMode.dark);
+      expect(find.text('Dark'), findsOneWidget);
+    },
+  );
 
   testWidgets('every internal Settings row opens the correct destination', (
     tester,
@@ -2692,10 +2775,6 @@ void main() {
       ConnectedAccountsScreen.routeName,
     );
     expect(
-      (await openAndReturn('settings-manage-accounts')).name,
-      ConnectedAccountsScreen.routeName,
-    );
-    expect(
       (await openAndReturn('settings-privacy-security')).name,
       PrivacySecurityScreen.routeName,
     );
@@ -2717,7 +2796,7 @@ void main() {
     expect((blocked.arguments! as SenderListArguments).control, 'BLOCKED');
     expect(
       settingsReads,
-      8,
+      7,
       reason: 'Settings must refresh after every return.',
     );
   });
@@ -2726,13 +2805,13 @@ void main() {
     tester,
   ) async {
     await setScreenSize(tester, const Size(390, 844));
-    var notificationsEnabled = true;
+    var scanFrequency = 'Auto';
     var saveAttempts = 0;
     Map<String, dynamic> responseBody() => {
       'account': {'connectedAccountsCount': 1},
       'preferences': {
-        'notificationsEnabled': notificationsEnabled,
-        'inboxScanFrequency': 'Auto',
+        'notificationsEnabled': true,
+        'inboxScanFrequency': scanFrequency,
         'theme': 'System',
       },
       'emailManagement': {
@@ -2754,7 +2833,7 @@ void main() {
             503,
           );
         }
-        notificationsEnabled = false;
+        scanFrequency = 'Daily';
         return http.Response(jsonEncode(responseBody()), 200);
       }),
       sessionStore: MemorySessionStore(),
@@ -2769,20 +2848,20 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    final notifications = find.byKey(
-      const ValueKey('settings-security-notifications'),
-    );
-    await tester.tap(notifications);
-    await tester.pump();
-    await tester.pump(const Duration(milliseconds: 100));
+    final frequency = find.byKey(const ValueKey('settings-scan-frequency'));
+    await tester.ensureVisible(frequency);
+    await tester.tap(frequency);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Daily'));
+    await tester.pumpAndSettle();
     expect(find.byType(SnackBar), findsOneWidget);
-    expect(find.textContaining('try again'), findsOneWidget);
-    expect(tester.widget<Switch>(find.byType(Switch)).value, isTrue);
-
-    await tester.tap(notifications);
+    expect(find.text('Auto'), findsOneWidget);
+    await tester.tap(frequency);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Daily'));
     await tester.pumpAndSettle();
     expect(saveAttempts, 2);
-    expect(tester.widget<Switch>(find.byType(Switch)).value, isFalse);
+    expect(find.text('Daily'), findsOneWidget);
   });
 
   testWidgets('all Settings legal and support links use production URLs', (
@@ -2831,7 +2910,6 @@ void main() {
       'settings-privacy-policy',
       'settings-terms',
       'settings-support',
-      'settings-account-deletion-info',
     ]) {
       final finder = find.byKey(ValueKey(key));
       await tester.ensureVisible(finder);
@@ -2843,7 +2921,6 @@ void main() {
       AppConfig.privacyPolicyUrl,
       AppConfig.termsOfServiceUrl,
       AppConfig.supportUrl,
-      AppConfig.accountDeletionUrl,
     ]);
   });
 
@@ -2886,9 +2963,57 @@ void main() {
     expect(find.text('Download or share data export'), findsNothing);
     expect(find.byIcon(Icons.download_outlined), findsNothing);
     expect(find.text('Privacy Policy'), findsOneWidget);
-    expect(find.text('Account deletion information'), findsOneWidget);
-    expect(find.text('Delete SenderWho account'), findsOneWidget);
+    expect(find.text('Account deletion information'), findsNothing);
+    expect(find.text('Delete SenderWho account'), findsNothing);
   });
+
+  testWidgets(
+    'Privacy screens omit password-change and account-deletion controls',
+    (tester) async {
+      await setScreenSize(tester, const Size(390, 844));
+      final repository = SenderWhoRepository(
+        previewMode: false,
+        client: MockClient((request) async {
+          if (request.url.path.endsWith('/privacy-security')) {
+            return http.Response(
+              jsonEncode({
+                'blockedSenders': 0,
+                'trustedSenders': 0,
+                'dataRetention': 'Metadata only',
+              }),
+              200,
+            );
+          }
+          if (request.url.path.endsWith('/auth/sessions')) {
+            return http.Response(jsonEncode({'items': <Object>[]}), 200);
+          }
+          return http.Response('Not found', 404);
+        }),
+        sessionStore: MemorySessionStore(),
+        baseUrl: 'https://api.example.test/api/v1',
+      );
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: AppTheme.light(),
+          home: PrivacySecurityScreen(repository: repository),
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(
+        find.byKey(const ValueKey('provider-password-help')),
+        findsNothing,
+      );
+      expect(
+        find.byKey(const ValueKey('revoke-after-provider-password-change')),
+        findsNothing,
+      );
+      expect(find.text('Delete SenderWho account'), findsNothing);
+      expect(find.text('Account deletion information'), findsNothing);
+      expect(find.text('Mailbox access'), findsOneWidget);
+      expect(find.text('Privacy Policy'), findsOneWidget);
+      expect(tester.takeException(), isNull);
+    },
+  );
 
   testWidgets('Search loads later result pages without losing earlier items', (
     tester,
@@ -2947,8 +3072,8 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    await tester.ensureVisible(find.text('Search email metadata'));
-    await tester.tap(find.text('Search email metadata'));
+    await tester.ensureVisible(find.text('Search'));
+    await tester.tap(find.text('Search'));
     await tester.pumpAndSettle();
     expect(find.text('First invoice'), findsOneWidget);
 
@@ -3020,7 +3145,7 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('Blocked Senders'), findsWidgets);
-    expect(find.textContaining('senders found in your inbox'), findsOneWidget);
+    expect(find.text('No matching senders'), findsOneWidget);
   });
 
   testWidgets('Drawer dark mode switch changes the whole app theme', (
@@ -3028,18 +3153,22 @@ void main() {
   ) async {
     await setScreenSize(tester, const Size(390, 844));
     final themeStore = MemoryThemePreferenceStore();
-    await tester.pumpWidget(SenderWhoApp(themePreferenceStore: themeStore));
+    await tester.pumpWidget(
+      SenderWhoApp(
+        initiallyAuthenticated: true,
+        initialThemeMode: ThemeMode.light,
+        themePreferenceStore: themeStore,
+      ),
+    );
 
-    final navigator = tester.state<NavigatorState>(find.byType(Navigator));
-    navigator.pushNamed(DashboardScreen.routeName);
     await tester.pumpAndSettle();
 
     expect(
-      Theme.of(tester.element(find.text('Dashboard').first)).brightness,
+      Theme.of(tester.element(find.text('All Senders').first)).brightness,
       Brightness.light,
     );
 
-    await tester.tap(find.byIcon(Icons.menu_rounded));
+    await tester.tap(find.byTooltip('Open menu'));
     await tester.pumpAndSettle();
 
     expect(find.byKey(const ValueKey('drawer-profile-button')), findsOneWidget);
@@ -3049,7 +3178,7 @@ void main() {
 
     expect(find.byTooltip('Use light mode'), findsOneWidget);
     expect(
-      Theme.of(tester.element(find.text('Dashboard').first)).brightness,
+      Theme.of(tester.element(find.text('All Senders').first)).brightness,
       Brightness.dark,
     );
     expect(themeStore.mode, ThemeMode.dark);
@@ -3072,43 +3201,50 @@ void main() {
 
     expect(find.text('Profile'), findsWidgets);
     expect(find.text('Account details'), findsOneWidget);
-    expect(find.byTooltip('Open menu'), findsOneWidget);
     expect(find.byTooltip('Back'), findsNothing);
+    await tester.binding.handlePopRoute();
+    await tester.pumpAndSettle();
+    expect(find.text('All Senders'), findsOneWidget);
   });
 
-  testWidgets('drawer destinations replace history and remain menu roots', (
-    tester,
-  ) async {
-    await setScreenSize(tester, const Size(390, 844));
-    await tester.pumpWidget(const SenderWhoApp(initiallyAuthenticated: true));
-    await tester.pumpAndSettle();
+  testWidgets(
+    'drawer main destinations match the bottom tabs without a Back icon',
+    (tester) async {
+      await setScreenSize(tester, const Size(390, 844));
+      await tester.pumpWidget(const SenderWhoApp(initiallyAuthenticated: true));
+      await tester.pumpAndSettle();
 
-    await tester.tap(find.byTooltip('Open menu'));
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('All Senders'));
-    await tester.pumpAndSettle();
+      await tester.tap(find.byTooltip('Open menu'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.widgetWithText(ListTile, 'All Senders'));
+      await tester.pumpAndSettle();
 
-    await tester.tap(find.byTooltip('Open menu'));
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('Email Inbox'));
-    await tester.pumpAndSettle();
+      await tester.tap(find.byTooltip('Open menu'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Email Inbox'));
+      await tester.pumpAndSettle();
 
-    final navigator = tester.state<NavigatorState>(find.byType(Navigator));
-    expect(
-      tester.widget<Text>(find.byKey(const ValueKey('app-header-title'))).data,
-      'Inbox',
-    );
-    expect(find.byTooltip('Open menu'), findsOneWidget);
-    expect(find.byTooltip('Back'), findsNothing);
-    expect(navigator.canPop(), isFalse);
-  });
+      final navigator = tester.state<NavigatorState>(find.byType(Navigator));
+      expect(
+        tester
+            .widget<Text>(find.byKey(const ValueKey('app-header-title')))
+            .data,
+        'Inbox',
+      );
+      expect(find.byTooltip('Back'), findsNothing);
+      await tester.binding.handlePopRoute();
+      await tester.pumpAndSettle();
+      expect(find.text('All Senders'), findsOneWidget);
+      expect(navigator.canPop(), isFalse);
+    },
+  );
 
   testWidgets('Sign out explains that Gmail remains connected', (tester) async {
     await setScreenSize(tester, const Size(390, 844));
     await tester.pumpWidget(const SenderWhoApp(initiallyAuthenticated: true));
     await tester.pump();
 
-    await tester.tap(find.byIcon(Icons.menu_rounded));
+    await tester.tap(find.byTooltip('Open menu'));
     await tester.pumpAndSettle();
     await tester.scrollUntilVisible(
       find.byKey(const ValueKey('drawer-sign-out')),
@@ -3123,23 +3259,22 @@ void main() {
       ),
       findsOneWidget,
     );
-    expect(find.text('This device only'), findsOneWidget);
     expect(
       tester.getSize(find.byKey(const ValueKey('drawer-sign-out'))).height,
-      greaterThanOrEqualTo(62),
+      greaterThanOrEqualTo(48),
     );
     await tester.tap(find.byKey(const ValueKey('drawer-sign-out')));
     await tester.pumpAndSettle();
 
-    expect(find.text('Sign out of SenderWho?'), findsOneWidget);
+    expect(find.text('Sign out?'), findsOneWidget);
     expect(
-      find.textContaining('Your email connection stays linked'),
+      find.textContaining('Your mailboxes stay connected'),
       findsOneWidget,
     );
 
     await tester.tap(find.text('Cancel'));
     await tester.pumpAndSettle();
-    expect(find.text('Sign out of SenderWho?'), findsNothing);
+    expect(find.text('Sign out?'), findsNothing);
   });
 
   testWidgets('Sign out shows progress and prevents duplicate requests', (

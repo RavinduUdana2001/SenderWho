@@ -9,6 +9,38 @@ import 'package:sender_who/services/senderwho_repository.dart';
 
 void main() {
   test(
+    'reports provider password change and clears the local session',
+    () async {
+      final store = MemorySessionStore()..refreshToken = 'refresh-token';
+      final requests = <http.Request>[];
+      final repository = SenderWhoRepository(
+        previewMode: false,
+        client: MockClient((request) async {
+          requests.add(request);
+          return http.Response(
+            jsonEncode({'success': true, 'revokedSessions': 2}),
+            200,
+          );
+        }),
+        sessionStore: store,
+        baseUrl: 'https://api.example.test/api/v1',
+      );
+
+      await expectLater(
+        repository.revokeSessionsAfterProviderPasswordChange(),
+        completion(2),
+      );
+
+      expect(requests.single.method, 'POST');
+      expect(
+        requests.single.url.path,
+        '/api/v1/auth/sessions/revoke-after-provider-password-change',
+      );
+      expect(store.refreshToken, isNull);
+    },
+  );
+
+  test(
     'settings preferences normalize legacy values and persist updates',
     () async {
       final patchBodies = <Map<String, dynamic>>[];
@@ -199,6 +231,22 @@ void main() {
             200,
           );
         }
+        if (request.url.path.endsWith('/email-accounts')) {
+          return http.Response(
+            jsonEncode({
+              'items': [
+                {
+                  'id': 'new-mailbox',
+                  'provider': 'GOOGLE',
+                  'emailAddress': 'new@example.com',
+                  'isActive': true,
+                  'syncStatus': 'PENDING',
+                },
+              ],
+            }),
+            200,
+          );
+        }
         return http.Response('Not found', 404);
       }),
       sessionStore: store,
@@ -211,7 +259,9 @@ void main() {
     expect(paths, [
       '/api/v1/auth/connect/google/start',
       '/api/v1/auth/oauth/session/exchange',
+      '/api/v1/email-accounts',
     ]);
+    expect(repository.activeMailbox.value?.id, 'new-mailbox');
     expect(await store.readRefreshToken(), 'current-refresh-token');
   });
 
@@ -225,7 +275,11 @@ void main() {
           endsWith('/email-accounts/account-2/activate'),
         );
         return http.Response(
-          jsonEncode({'id': 'account-2', 'isActive': true}),
+          jsonEncode({
+            'id': 'account-2',
+            'emailAddress': 'second@example.com',
+            'isActive': true,
+          }),
           200,
         );
       }),
@@ -234,6 +288,7 @@ void main() {
     );
 
     expect(await repository.activateEmailAccount('account-2'), isTrue);
+    expect(repository.activeMailbox.value?.emailAddress, 'second@example.com');
   });
 
   test('secure storage read failures do not crash app startup', () async {
@@ -254,6 +309,16 @@ void main() {
     () async {
       final store = MemorySessionStore()..refreshToken = 'refresh-old';
       final client = MockClient((request) async {
+        if (request.url.path.endsWith('/email-accounts')) {
+          return http.Response(
+            jsonEncode({
+              'items': [
+                {'id': 'gmail-1', 'isActive': true, 'syncStatus': 'READY'},
+              ],
+            }),
+            200,
+          );
+        }
         if (request.url.path.endsWith('/auth/refresh')) {
           expect(request.headers['x-senderwho-device-id'], isNotEmpty);
           expect(request.headers['x-senderwho-device-name'], isNotEmpty);
@@ -425,6 +490,16 @@ void main() {
       var refreshCount = 0;
       var dashboardCount = 0;
       final client = MockClient((request) async {
+        if (request.url.path.endsWith('/email-accounts')) {
+          return http.Response(
+            jsonEncode({
+              'items': [
+                {'id': 'gmail-1', 'isActive': true, 'syncStatus': 'READY'},
+              ],
+            }),
+            200,
+          );
+        }
         if (request.url.path.endsWith('/auth/refresh')) {
           refreshCount += 1;
           final expected = refreshCount == 1 ? 'refresh-0' : 'refresh-1';

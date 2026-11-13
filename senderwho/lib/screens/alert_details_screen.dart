@@ -6,6 +6,7 @@ import '../screens/email_details_screen.dart';
 import '../screens/emails_screen.dart';
 import '../screens/sender_details_screen.dart';
 import '../services/senderwho_repository.dart';
+import '../services/repository_scope.dart';
 import '../theme/app_colors.dart';
 import '../utils/responsive.dart';
 import '../widgets/app_card.dart';
@@ -49,7 +50,7 @@ class _AlertDetailsScreenState extends State<AlertDetailsScreen> {
   bool _busy = false;
 
   SenderWhoRepository get _repository =>
-      widget.repository ?? senderWhoRepository;
+      widget.repository ?? RepositoryScope.read(context);
 
   @override
   void didChangeDependencies() {
@@ -74,6 +75,7 @@ class _AlertDetailsScreenState extends State<AlertDetailsScreen> {
       final confirmed = await showDialog<bool>(
         context: context,
         builder: (context) => AlertDialog(
+          scrollable: true,
           title: const Text('Dismiss this alert?'),
           content: const Text(
             'Dismiss only if you reviewed the sender and no longer need this warning.',
@@ -119,13 +121,13 @@ class _AlertDetailsScreenState extends State<AlertDetailsScreen> {
 
     if (alert == null) {
       return AppPage(
+        header: const AppHeader(title: 'Alert Details', showBack: true),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const AppHeader(title: 'Alert Details', showBack: true),
             SizedBox(height: context.gap(25)),
             Text(
-              'Select a security alert to view its real email details.',
+              'Select a security alert to view its details.',
               style: Theme.of(context).textTheme.bodyMedium,
             ),
           ],
@@ -140,14 +142,14 @@ class _AlertDetailsScreenState extends State<AlertDetailsScreen> {
         final loadedAlert = snapshot.data ?? alert;
         _seed = loadedAlert;
         return AppPage(
+          header: AppHeader(
+            title: 'Alert Details',
+            subtitle: loadedAlert.time,
+            showBack: true,
+          ),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              AppHeader(
-                title: 'Alert Details',
-                subtitle: loadedAlert.time,
-                showBack: true,
-              ),
               SizedBox(height: context.gap(18)),
               if (snapshot.connectionState == ConnectionState.waiting) ...[
                 const LinearProgressIndicator(minHeight: 2),
@@ -162,20 +164,22 @@ class _AlertDetailsScreenState extends State<AlertDetailsScreen> {
                 const SizedBox(height: 12),
               ],
               AppCard(
-                padding: const EdgeInsets.all(20),
+                padding: const EdgeInsets.all(16),
                 color: AppColors.softFill(context, loadedAlert.color),
                 borderColor: loadedAlert.color.withValues(alpha: 0.22),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Row(
+                    Wrap(
+                      alignment: WrapAlignment.spaceBetween,
+                      crossAxisAlignment: WrapCrossAlignment.center,
+                      spacing: 14,
+                      runSpacing: 8,
                       children: [
                         IconBubble(
                           icon: Icons.report_gmailerrorred_outlined,
                           color: loadedAlert.color,
                         ),
-                        const SizedBox(width: 14),
-                        const Spacer(),
                         StatusChip(
                           label: loadedAlert.risk,
                           color: loadedAlert.color,
@@ -215,104 +219,6 @@ class _AlertDetailsScreenState extends State<AlertDetailsScreen> {
                   ),
                 ),
               ],
-              SizedBox(height: context.gap(22)),
-              const SectionTitle(title: 'Alert information'),
-              const SizedBox(height: 10),
-              AppCard(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 18,
-                  vertical: 6,
-                ),
-                child: Column(
-                  children: [
-                    _AlertInfoLine(
-                      icon: Icons.alternate_email_rounded,
-                      label: 'Sender email',
-                      value: loadedAlert.email,
-                    ),
-                    Divider(color: AppColors.borderFor(context)),
-                    _AlertInfoLine(
-                      icon: Icons.schedule_rounded,
-                      label: 'Detected',
-                      value: loadedAlert.time,
-                    ),
-                    Divider(color: AppColors.borderFor(context)),
-                    _AlertInfoLine(
-                      icon: Icons.gpp_maybe_outlined,
-                      label: 'Risk level',
-                      value: loadedAlert.risk,
-                      valueColor: loadedAlert.color,
-                    ),
-                    if (loadedAlert.claimedBrand?.isNotEmpty == true) ...[
-                      Divider(color: AppColors.borderFor(context)),
-                      _AlertInfoLine(
-                        icon: Icons.badge_outlined,
-                        label: 'Claimed identity',
-                        value: loadedAlert.claimedBrand!,
-                      ),
-                    ],
-                    if (loadedAlert.authenticatedDomain?.isNotEmpty ==
-                        true) ...[
-                      Divider(color: AppColors.borderFor(context)),
-                      _AlertInfoLine(
-                        icon: Icons.verified_user_outlined,
-                        label: 'Authenticated domain',
-                        value: loadedAlert.authenticatedDomain!,
-                      ),
-                    ],
-                    if (loadedAlert.replyToEmail?.isNotEmpty == true) ...[
-                      Divider(color: AppColors.borderFor(context)),
-                      _AlertInfoLine(
-                        icon: Icons.reply_rounded,
-                        label: 'Reply-to address',
-                        value: loadedAlert.replyToEmail!,
-                      ),
-                    ],
-                    Divider(color: AppColors.borderFor(context)),
-                    _AlertInfoLine(
-                      icon: Icons.analytics_outlined,
-                      label: 'Identity risk score',
-                      value: '${loadedAlert.identityRiskScore}/100',
-                      valueColor: loadedAlert.color,
-                    ),
-                  ],
-                ),
-              ),
-              SizedBox(height: context.gap(22)),
-              const SectionTitle(title: 'Why this was flagged'),
-              const SizedBox(height: 10),
-              AppCard(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 18,
-                  vertical: 8,
-                ),
-                child: Column(
-                  children: loadedAlert.identityEvidence.isEmpty
-                      ? [
-                          _ReasonLine(
-                            icon: Icons.security_rounded,
-                            text: loadedAlert.reason,
-                          ),
-                        ]
-                      : [
-                          for (
-                            var index = 0;
-                            index < loadedAlert.identityEvidence.length;
-                            index++
-                          ) ...[
-                            _ReasonLine(
-                              icon: _evidenceIcon(
-                                loadedAlert.identityEvidence[index].code,
-                              ),
-                              text: loadedAlert.identityEvidence[index].detail,
-                            ),
-                            if (index !=
-                                loadedAlert.identityEvidence.length - 1)
-                              Divider(color: AppColors.borderFor(context)),
-                          ],
-                        ],
-                ),
-              ),
               SizedBox(height: context.gap(22)),
               const SectionTitle(title: 'Recommended action'),
               const SizedBox(height: 10),
@@ -410,6 +316,112 @@ class _AlertDetailsScreenState extends State<AlertDetailsScreen> {
                       : const Icon(Icons.notifications_off_outlined),
                   label: Text(_busy ? 'Updating alert…' : 'Dismiss alert'),
                 ),
+              ),
+              if (loadedAlert.identityEvidence.isNotEmpty) ...[
+                SizedBox(height: context.gap(22)),
+                const SectionTitle(title: 'Why this was flagged'),
+                const SizedBox(height: 10),
+                AppCard(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 18,
+                    vertical: 8,
+                  ),
+                  child: Column(
+                    children: loadedAlert.identityEvidence.isEmpty
+                        ? [
+                            _ReasonLine(
+                              icon: Icons.security_rounded,
+                              text: loadedAlert.reason,
+                            ),
+                          ]
+                        : [
+                            for (
+                              var index = 0;
+                              index < loadedAlert.identityEvidence.length;
+                              index++
+                            ) ...[
+                              _ReasonLine(
+                                icon: _evidenceIcon(
+                                  loadedAlert.identityEvidence[index].code,
+                                ),
+                                text:
+                                    loadedAlert.identityEvidence[index].detail,
+                              ),
+                              if (index !=
+                                  loadedAlert.identityEvidence.length - 1)
+                                Divider(color: AppColors.borderFor(context)),
+                            ],
+                          ],
+                  ),
+                ),
+              ],
+              SizedBox(height: context.gap(22)),
+              ExpansionTile(
+                key: const ValueKey('alert-technical-details'),
+                tilePadding: EdgeInsets.zero,
+                title: const Text('Alert information'),
+                children: [
+                  AppCard(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 18,
+                      vertical: 6,
+                    ),
+                    child: Column(
+                      children: [
+                        _AlertInfoLine(
+                          icon: Icons.alternate_email_rounded,
+                          label: 'Sender email',
+                          value: loadedAlert.email,
+                        ),
+                        Divider(color: AppColors.borderFor(context)),
+                        _AlertInfoLine(
+                          icon: Icons.schedule_rounded,
+                          label: 'Detected',
+                          value: loadedAlert.time,
+                        ),
+                        Divider(color: AppColors.borderFor(context)),
+                        _AlertInfoLine(
+                          icon: Icons.gpp_maybe_outlined,
+                          label: 'Risk level',
+                          value: loadedAlert.risk,
+                          valueColor: loadedAlert.color,
+                        ),
+                        if (loadedAlert.claimedBrand?.isNotEmpty == true) ...[
+                          Divider(color: AppColors.borderFor(context)),
+                          _AlertInfoLine(
+                            icon: Icons.badge_outlined,
+                            label: 'Claimed identity',
+                            value: loadedAlert.claimedBrand!,
+                          ),
+                        ],
+                        if (loadedAlert.authenticatedDomain?.isNotEmpty ==
+                            true) ...[
+                          Divider(color: AppColors.borderFor(context)),
+                          _AlertInfoLine(
+                            icon: Icons.verified_user_outlined,
+                            label: 'Authenticated domain',
+                            value: loadedAlert.authenticatedDomain!,
+                          ),
+                        ],
+                        if (loadedAlert.replyToEmail?.isNotEmpty == true) ...[
+                          Divider(color: AppColors.borderFor(context)),
+                          _AlertInfoLine(
+                            icon: Icons.reply_rounded,
+                            label: 'Reply-to address',
+                            value: loadedAlert.replyToEmail!,
+                          ),
+                        ],
+                        Divider(color: AppColors.borderFor(context)),
+                        _AlertInfoLine(
+                          icon: Icons.analytics_outlined,
+                          label: 'Identity risk score',
+                          value: '${loadedAlert.identityRiskScore}/100',
+                          valueColor: loadedAlert.color,
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
               ),
             ],
           ),

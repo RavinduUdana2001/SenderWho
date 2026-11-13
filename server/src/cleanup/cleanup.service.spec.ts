@@ -1,3 +1,4 @@
+import { mailboxScope } from "../common/mailbox-scope";
 import { CleanupCategory, JobStatus } from "@prisma/client";
 import { buildCleanupMessageWhere, CleanupService } from "./cleanup.service";
 
@@ -210,7 +211,7 @@ describe("CleanupService preview", () => {
     expect(prisma.cleanupJob.findMany).toHaveBeenCalledWith(
       expect.objectContaining({
         where: {
-          userId: "user-1",
+          ...mailboxScope("user-1"),
           status: { in: [JobStatus.QUEUED, JobStatus.RUNNING] },
         },
       }),

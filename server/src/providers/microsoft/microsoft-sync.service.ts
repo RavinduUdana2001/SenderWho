@@ -37,7 +37,12 @@ export class MicrosoftSyncService {
     private readonly metadata: GmailSyncService,
   ) {}
 
-  async syncAccount(emailAccountId: string, onProgress?: SyncProgress) {
+  async syncAccount(
+    emailAccountId: string,
+    onProgress?: SyncProgress,
+    signal?: AbortSignal,
+  ) {
+    signal?.throwIfAborted();
     const claimed = await this.prisma.emailAccount.updateMany({
       where: {
         id: emailAccountId,
@@ -73,6 +78,7 @@ export class MicrosoftSyncService {
       const result = await this.withMicrosoftAccess(
         emailAccountId,
         async (accessToken) => {
+          signal?.throwIfAborted();
           const [folders, folderKinds] = await Promise.all([
             this.graph.listMailFolders(accessToken),
             this.graph.getFolderKinds(accessToken),
@@ -86,6 +92,7 @@ export class MicrosoftSyncService {
           );
 
           while (index < state.folders.length && processed < maxMessages) {
+            signal?.throwIfAborted();
             const folder = state.folders[index];
             const page = await this.graph.listMessageDelta(
               accessToken,
@@ -103,12 +110,14 @@ export class MicrosoftSyncService {
               });
             }
             for (const message of page.messages) {
+              signal?.throwIfAborted();
               const blocked = await this.metadata.persistProviderMessage(
                 emailAccountId,
                 account.userId,
                 message,
               );
               if (blocked && !(message.labelIds ?? []).includes("TRASH")) {
+                signal?.throwIfAborted();
                 await this.applyMessageAction(
                   emailAccountId,
                   message.id,
@@ -148,6 +157,7 @@ export class MicrosoftSyncService {
         },
       );
 
+      signal?.throwIfAborted();
       await this.metadata.recalculateAccount(emailAccountId);
       await this.metadata.refreshCleanupSuggestions(emailAccountId);
       const backfillProcessed = account.backfillComplete
@@ -176,6 +186,7 @@ export class MicrosoftSyncService {
         backfillProcessed,
       };
     } catch (error) {
+      if (signal?.aborted) throw error;
       const message =
         error instanceof Error
           ? error.message.slice(0, 1_000)

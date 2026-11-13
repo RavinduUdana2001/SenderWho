@@ -30,17 +30,13 @@ class IconBubble extends StatelessWidget {
       width: size,
       height: size,
       alignment: Alignment.center,
-      decoration: BoxDecoration(
-        color: fill,
-        borderRadius: BorderRadius.circular(size * 0.32),
-        border: Border.all(color: resolvedColor.withValues(alpha: 0.18)),
-      ),
+      decoration: BoxDecoration(color: fill, shape: BoxShape.circle),
       child: label == null
           ? Icon(icon, color: resolvedColor, size: iconSize)
           : Text(
               label!,
               style: Theme.of(context).textTheme.labelLarge?.copyWith(
-                color: labelColor ?? Colors.white,
+                color: labelColor ?? AppColors.textFor(context),
                 fontSize: iconSize * 0.75,
                 fontWeight: FontWeight.w700,
               ),

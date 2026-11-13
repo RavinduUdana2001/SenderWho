@@ -21,6 +21,11 @@ export enum MessageMailbox {
 export class ListMessagesDto extends PaginationDto {
   @IsOptional()
   @IsString()
+  @MaxLength(64)
+  emailAccountId?: string;
+
+  @IsOptional()
+  @IsString()
   @MaxLength(200)
   query?: string;
 

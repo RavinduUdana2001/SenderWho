@@ -44,3 +44,44 @@ describe("TokenEncryptionService", () => {
     expect(() => currentService.decrypt(encrypted, "account:two")).toThrow();
   });
 });
+
+describe("safe cryptographic failures", () => {
+  it("returns the same safe external error for corruption, context, and missing keys", () => {
+    const service = new TokenEncryptionService(
+      new ConfigService({
+        auth: { tokenEncryptionKey: randomBytes(32).toString("base64") },
+      }),
+    );
+    const payload = service.encrypt("private-plaintext");
+    const mutate = (index: number) => {
+      const parts = payload.split(".");
+      const bytes = Buffer.from(parts[index], "base64url");
+      bytes[0] ^= 1;
+      parts[index] = bytes.toString("base64url");
+      return parts.join(".");
+    };
+    const missing = new TokenEncryptionService(new ConfigService({ auth: {} }));
+    for (const operation of [
+      () => service.decrypt("invalid"),
+      () => service.decrypt(mutate(3)),
+      () => service.decrypt(mutate(4)),
+      () => service.decrypt(payload, "wrong-context"),
+      () => missing.decrypt(payload),
+      () => missing.encrypt("private-plaintext"),
+      () => service.decrypt(payload.replace(".legacy.", ".missing.")),
+    ]) {
+      try {
+        operation();
+        throw new Error("Expected crypto rejection");
+      } catch (error) {
+        expect((error as { getResponse: () => unknown }).getResponse()).toEqual(
+          {
+            statusCode: 503,
+            error: "Service Unavailable",
+            message: "Secure credential processing failed.",
+          },
+        );
+      }
+    }
+  });
+});

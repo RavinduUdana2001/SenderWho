@@ -1,5 +1,6 @@
 import { IsEnum, IsOptional, IsString, MaxLength } from "class-validator";
 import { PaginationDto } from "../../common/dto/pagination.dto";
+import { SenderCategory } from "@prisma/client";
 
 export enum SenderKind {
   ALL = "ALL",
@@ -17,8 +18,17 @@ export enum SenderControl {
 export class ListSendersDto extends PaginationDto {
   @IsOptional()
   @IsString()
+  @MaxLength(64)
+  emailAccountId?: string;
+
+  @IsOptional()
+  @IsString()
   @MaxLength(200)
   query?: string;
+
+  @IsOptional()
+  @IsEnum(SenderCategory)
+  category?: SenderCategory;
 
   @IsOptional()
   @IsEnum(SenderKind)

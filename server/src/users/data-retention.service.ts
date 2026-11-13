@@ -4,6 +4,7 @@ import {
   OnModuleDestroy,
   OnModuleInit,
 } from "@nestjs/common";
+import { BackgroundHealthService } from "../common/background-health.service";
 import { ConfigService } from "@nestjs/config";
 import { PrismaService } from "../database/prisma.service";
 
@@ -11,23 +12,61 @@ import { PrismaService } from "../database/prisma.service";
 export class DataRetentionService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(DataRetentionService.name);
   private timer?: NodeJS.Timeout;
+  private running = false;
+  private stopped = true;
+  private failures = 0;
 
   constructor(
     private readonly prisma: PrismaService,
     private readonly config: ConfigService,
+    private readonly health: BackgroundHealthService = new BackgroundHealthService(),
   ) {}
 
   onModuleInit() {
     if (this.prisma.mockDataEnabled) return;
-    this.timer = setInterval(() => void this.run(), 24 * 60 * 60 * 1_000);
-    this.timer.unref();
+    this.stopped = false;
+    this.health.register("dataRetention", 26 * 60 * 60 * 1_000);
+    this.schedule(24 * 60 * 60 * 1_000);
   }
 
   onModuleDestroy() {
-    if (this.timer) clearInterval(this.timer);
+    this.stopped = true;
+    if (this.timer) clearTimeout(this.timer);
+    this.health.remove("dataRetention");
+  }
+
+  private schedule(delay: number) {
+    if (this.stopped) return;
+    if (this.timer) clearTimeout(this.timer);
+    this.timer = setTimeout(() => void this.run(), delay);
+    this.timer.unref();
   }
 
   async run() {
+    if (this.running) return;
+    this.running = true;
+    let delay = 24 * 60 * 60 * 1_000;
+    try {
+      await this.deleteExpired();
+      this.failures = 0;
+      this.health.success("dataRetention");
+    } catch (error) {
+      this.health.failure("dataRetention");
+      delay = Math.min(60_000 * 2 ** Math.min(this.failures++, 5), 30 * 60_000);
+      this.logger.error(
+        JSON.stringify({
+          event: "data_retention.failed",
+          errorType:
+            error instanceof Error ? error.constructor.name : "UnknownError",
+        }),
+      );
+    } finally {
+      this.running = false;
+      this.schedule(delay);
+    }
+  }
+
+  private async deleteExpired() {
     const messageDays = this.config.get<number>("retention.messageDays", 365);
     const auditDays = this.config.get<number>("retention.auditDays", 730);
     const jobDays = this.config.get<number>("retention.jobDays", 90);

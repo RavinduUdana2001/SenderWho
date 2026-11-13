@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../models/app_models.dart';
 import '../services/senderwho_repository.dart';
+import '../services/repository_scope.dart';
 import '../theme/app_colors.dart';
 import '../theme/app_motion.dart';
 import '../utils/responsive.dart';
@@ -13,7 +14,8 @@ import '../widgets/app_page.dart';
 import '../widgets/section_title.dart';
 
 class InboxHealthScreen extends StatefulWidget {
-  const InboxHealthScreen({super.key});
+  const InboxHealthScreen({super.key, this.repository});
+  final SenderWhoRepository? repository;
 
   static const routeName = '/inbox-health';
 
@@ -22,12 +24,14 @@ class InboxHealthScreen extends StatefulWidget {
 }
 
 class _InboxHealthScreenState extends State<InboxHealthScreen> {
-  late Future<InboxHealthSummary> _healthFuture = senderWhoRepository
-      .getInboxHealth();
+  SenderWhoRepository get _repository =>
+      widget.repository ?? RepositoryScope.read(context);
+
+  late Future<InboxHealthSummary> _healthFuture = _repository.getInboxHealth();
 
   void _reload() {
     setState(() {
-      _healthFuture = senderWhoRepository.getInboxHealth();
+      _healthFuture = _repository.getInboxHealth();
     });
   }
 
@@ -56,14 +60,14 @@ class _InboxHealthScreenState extends State<InboxHealthScreen> {
         };
 
         return AppPage(
+          header: const AppHeader(
+            title: 'Inbox Health',
+            subtitle: 'See what needs attention in your inbox',
+            showBack: true,
+          ),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              const AppHeader(
-                title: 'Inbox Health',
-                subtitle: 'A live score from your stored email metadata',
-                showBack: true,
-              ),
               SizedBox(height: context.gap(16)),
               AnimatedSwitcher(
                 duration: AppMotion.responsive(context, AppMotion.standard),
@@ -89,75 +93,42 @@ class _HealthContent extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final onGradient = AppColors.onGradientFor(context);
-    final onGradientMuted = AppColors.onGradientMutedFor(context);
-    final success = AppColors.successFor(context);
-    final successVisual = AppColors.successVisualFor(context);
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        AppGradientCard(
-          padding: const EdgeInsets.all(18),
+        AppCard(
+          color: AppColors.elevatedSurface(context),
+          padding: const EdgeInsets.all(16),
           child: Row(
             children: [
-              AppAnimatedProgressRing(
-                value: health.score / 100,
-                color: successVisual,
-                backgroundColor: successVisual.withValues(alpha: 0.16),
-                size: 80,
-                strokeWidth: 7.5,
-                child: AppAnimatedCount(
-                  value: health.score,
-                  formatter: (value) => '$value%',
-                  style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                    color: onGradient,
-                    fontWeight: FontWeight.w800,
-                  ),
-                ),
+              Icon(
+                Icons.health_and_safety_outlined,
+                color: Theme.of(context).colorScheme.primary,
+                size: 28,
               ),
-              const SizedBox(width: 16),
+              const SizedBox(width: 14),
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Row(
-                      children: [
-                        Container(
-                          width: 7,
-                          height: 7,
-                          decoration: BoxDecoration(
-                            color: successVisual,
-                            shape: BoxShape.circle,
-                          ),
-                        ),
-                        const SizedBox(width: 8),
-                        Expanded(
-                          child: Text(
-                            health.status,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: Theme.of(context).textTheme.titleSmall
-                                ?.copyWith(
-                                  color: success,
-                                  fontWeight: FontWeight.w800,
-                                ),
-                          ),
-                        ),
-                      ],
+                    Text(
+                      health.status,
+                      style: Theme.of(context).textTheme.titleMedium,
                     ),
-                    const SizedBox(height: 7),
+                    const SizedBox(height: 4),
                     Text(
                       health.score == 0
-                          ? 'Run an inbox scan to reveal your health score.'
-                          : 'Based on sender trust, spam signals, and inbox organization.',
-                      maxLines: 3,
-                      overflow: TextOverflow.ellipsis,
-                      style: Theme.of(
-                        context,
-                      ).textTheme.bodySmall?.copyWith(color: onGradientMuted),
+                          ? 'Scan your mailbox to see your score.'
+                          : 'Based on sender identity, spam, and inbox organization.',
+                      style: Theme.of(context).textTheme.bodySmall,
                     ),
                   ],
                 ),
+              ),
+              const SizedBox(width: 12),
+              Text(
+                '${health.score}%',
+                style: Theme.of(context).textTheme.headlineMedium,
               ),
             ],
           ),

@@ -4,9 +4,11 @@ import '../config/app_config.dart';
 import '../models/app_models.dart';
 import '../screens/all_senders_screen.dart';
 import '../services/senderwho_repository.dart';
+import '../services/repository_scope.dart';
 import '../theme/app_colors.dart';
 import '../utils/responsive.dart';
 import '../utils/public_links.dart';
+import '../utils/mail_date.dart';
 import '../widgets/app_card.dart';
 import '../widgets/app_async_state.dart';
 import '../widgets/app_header.dart';
@@ -14,6 +16,7 @@ import '../widgets/app_page.dart';
 import '../widgets/icon_bubble.dart';
 import '../widgets/section_title.dart';
 import 'settings_screen.dart';
+import 'connected_accounts_screen.dart';
 
 class PrivacySecurityScreen extends StatefulWidget {
   const PrivacySecurityScreen({super.key, this.repository});
@@ -31,7 +34,7 @@ class _PrivacySecurityScreenState extends State<PrivacySecurityScreen> {
   bool _busy = false;
 
   SenderWhoRepository get _repository =>
-      widget.repository ?? senderWhoRepository;
+      widget.repository ?? RepositoryScope.read(context);
 
   @override
   void initState() {
@@ -63,8 +66,9 @@ class _PrivacySecurityScreenState extends State<PrivacySecurityScreen> {
       SnackBar(
         content: Text(
           success
-              ? 'The selected session was signed out.'
-              : _repository.lastError ?? 'Could not revoke session.',
+              ? 'The selected device was signed out.'
+              : _repository.lastError ??
+                    'Could not sign out this device. Please try again.',
         ),
       ),
     );
@@ -75,6 +79,7 @@ class _PrivacySecurityScreenState extends State<PrivacySecurityScreen> {
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
+        scrollable: true,
         title: const Text('Sign out every device?'),
         content: const Text(
           'You will need to sign in with your email provider again on this device and every other device.',
@@ -100,49 +105,12 @@ class _PrivacySecurityScreenState extends State<PrivacySecurityScreen> {
       SnackBar(
         content: Text(
           count == null
-              ? _repository.lastError ?? 'Could not revoke sessions.'
-              : '$count active session(s) were signed out.',
+              ? _repository.lastError ??
+                    'Could not sign out all devices. Please try again.'
+              : '$count active session${count == 1 ? ' was' : 's were'} signed out.',
         ),
       ),
     );
-  }
-
-  Future<void> _deleteAccount() async {
-    if (_busy) return;
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Delete SenderWho account?'),
-        content: const Text(
-          'This permanently deletes SenderWho data and attempts to revoke provider access. Your email messages themselves are not deleted.',
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context, false),
-            child: const Text('Cancel'),
-          ),
-          FilledButton(
-            style: FilledButton.styleFrom(backgroundColor: AppColors.danger),
-            onPressed: () => Navigator.pop(context, true),
-            child: const Text('Delete permanently'),
-          ),
-        ],
-      ),
-    );
-    if (confirmed != true || !mounted) return;
-    setState(() => _busy = true);
-    final success = await _repository.deleteAccount();
-    if (!mounted) return;
-    setState(() => _busy = false);
-    if (!success) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(
-            _repository.lastError ?? 'Could not delete the account.',
-          ),
-        ),
-      );
-    }
   }
 
   @override
@@ -153,14 +121,10 @@ class _PrivacySecurityScreenState extends State<PrivacySecurityScreen> {
         if (snapshot.connectionState == ConnectionState.waiting &&
             !snapshot.hasData) {
           return const AppPage(
+            header: AppHeader(title: 'Privacy & Security', showBack: true),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                AppHeader(
-                  title: 'Privacy & Security',
-                  subtitle: 'Account protection, sender controls and data use',
-                  showBack: true,
-                ),
                 SizedBox(height: 18),
                 AppCard(
                   padding: EdgeInsets.all(28),
@@ -182,14 +146,13 @@ class _PrivacySecurityScreenState extends State<PrivacySecurityScreen> {
 
         if (snapshot.hasError) {
           return AppPage(
+            header: const AppHeader(
+              title: 'Privacy & Security',
+              showBack: true,
+            ),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                const AppHeader(
-                  title: 'Privacy & Security',
-                  subtitle: 'Account protection, sender controls and data use',
-                  showBack: true,
-                ),
                 SizedBox(height: context.gap(18)),
                 AppAsyncError(
                   message: appAsyncErrorMessage(snapshot.error),
@@ -201,14 +164,10 @@ class _PrivacySecurityScreenState extends State<PrivacySecurityScreen> {
         }
 
         return AppPage(
+          header: const AppHeader(title: 'Privacy & Security', showBack: true),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              const AppHeader(
-                title: 'Privacy & Security',
-                subtitle: 'Account protection, sender controls and data use',
-                showBack: true,
-              ),
               if (_busy) ...[
                 const SizedBox(height: 14),
                 const LinearProgressIndicator(
@@ -225,9 +184,13 @@ class _PrivacySecurityScreenState extends State<PrivacySecurityScreen> {
                   children: [
                     SettingsTile(
                       icon: Icons.verified_user_outlined,
-                      title: 'Email account security',
+                      title: 'Mailbox access',
                       subtitle:
-                          'Passwords and two-step verification are managed by your email provider.',
+                          'Manage connections and sign in again if needed',
+                      onTap: () => Navigator.pushNamed(
+                        context,
+                        ConnectedAccountsScreen.routeName,
+                      ),
                     ),
                   ],
                 ),
@@ -261,32 +224,15 @@ class _PrivacySecurityScreenState extends State<PrivacySecurityScreen> {
                             leading: Icon(Icons.devices_outlined),
                             title: Text('No active sessions found'),
                             subtitle: Text(
-                              'Pull back and retry if you are offline.',
+                              'No devices are currently signed in.',
                             ),
                           ),
                         for (final session in sessions) ...[
-                          ListTile(
-                            leading: Icon(
-                              session.current
-                                  ? Icons.phonelink_lock_rounded
-                                  : Icons.devices_outlined,
-                            ),
-                            title: Text(
-                              session.current
-                                  ? '${session.label} (this device)'
-                                  : session.label,
-                            ),
-                            subtitle: Text(
-                              session.ipAddress.isEmpty
-                                  ? 'Network address unavailable'
-                                  : session.ipAddress,
-                            ),
-                            trailing: TextButton(
-                              onPressed: _busy
-                                  ? null
-                                  : () => _revokeSession(session),
-                              child: const Text('Sign out'),
-                            ),
+                          _SessionRow(
+                            session: session,
+                            onSignOut: _busy
+                                ? null
+                                : () => _revokeSession(session),
                           ),
                           if (session != sessions.last)
                             const Divider(height: 1, indent: 20, endIndent: 20),
@@ -367,7 +313,7 @@ class _PrivacySecurityScreenState extends State<PrivacySecurityScreen> {
                           ),
                           const SizedBox(height: 8),
                           Text(
-                            'SenderWho stores mailbox metadata and short previews to provide inbox, sender, cleanup, unsubscribe, and security features. Full message text is retrieved only when you open a message. Retention: ${summary.dataRetention}.',
+                            'SenderWho saves sender details and short previews. Full messages load when opened. Read our Privacy Policy for data retention details.',
                             style: Theme.of(context).textTheme.bodySmall,
                           ),
                         ],
@@ -393,24 +339,6 @@ class _PrivacySecurityScreenState extends State<PrivacySecurityScreen> {
                         pageName: 'the Privacy Policy',
                       ),
                     ),
-                    const Divider(height: 1, indent: 20, endIndent: 20),
-                    SettingsTile(
-                      icon: Icons.info_outline_rounded,
-                      title: 'Account deletion information',
-                      subtitle: 'What is deleted and how to make a request',
-                      onTap: () => openSenderWhoPublicPage(
-                        context,
-                        url: AppConfig.accountDeletionUrl,
-                        pageName: 'account deletion information',
-                      ),
-                    ),
-                    const Divider(height: 1, indent: 20, endIndent: 20),
-                    SettingsTile(
-                      icon: Icons.delete_forever_outlined,
-                      title: 'Delete SenderWho account',
-                      subtitle: 'Permanent deletion and provider revocation',
-                      onTap: _busy ? null : _deleteAccount,
-                    ),
                   ],
                 ),
               ),
@@ -420,4 +348,72 @@ class _PrivacySecurityScreenState extends State<PrivacySecurityScreen> {
       },
     );
   }
+}
+
+class _SessionRow extends StatelessWidget {
+  const _SessionRow({required this.session, this.onSignOut});
+  final AppSessionInfo session;
+  final VoidCallback? onSignOut;
+
+  @override
+  Widget build(BuildContext context) => Padding(
+    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+    child: LayoutBuilder(
+      builder: (context, constraints) {
+        final compact =
+            constraints.maxWidth < 320 ||
+            MediaQuery.textScalerOf(context).scale(14) > 18;
+        final details = Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Icon(
+              session.current
+                  ? Icons.phonelink_lock_rounded
+                  : Icons.devices_outlined,
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    session.label,
+                    style: Theme.of(context).textTheme.titleSmall,
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    session.current
+                        ? 'This device'
+                        : session.lastUsedAt == null
+                        ? 'Signed in'
+                        : 'Last active ${formatMailDate(session.lastUsedAt!.toIso8601String(), detailed: true)}',
+                    style: Theme.of(context).textTheme.bodySmall,
+                  ),
+                ],
+              ),
+            ),
+          ],
+        );
+        final action = TextButton(
+          onPressed: onSignOut,
+          child: const Text('Sign out'),
+        );
+        return compact
+            ? Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  details,
+                  Align(alignment: Alignment.centerRight, child: action),
+                ],
+              )
+            : Row(
+                children: [
+                  Expanded(child: details),
+                  const SizedBox(width: 8),
+                  action,
+                ],
+              );
+      },
+    ),
+  );
 }

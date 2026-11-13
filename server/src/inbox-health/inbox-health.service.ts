@@ -1,3 +1,4 @@
+import { mailboxScope } from "../common/mailbox-scope";
 import { Injectable } from "@nestjs/common";
 import { PrismaService } from "../database/prisma.service";
 
@@ -8,19 +9,25 @@ export class InboxHealthService {
   async getHealth(userId: string) {
     const [totalMessages, spamMessages, clutterMessages, senderTrust] =
       await Promise.all([
-        this.prisma.message.count({ where: { userId, isTrashed: false } }),
         this.prisma.message.count({
-          where: { userId, isTrashed: false, category: "SPAM" },
+          where: { ...mailboxScope(userId), isTrashed: false },
         }),
         this.prisma.message.count({
           where: {
-            userId,
+            ...mailboxScope(userId),
+            isTrashed: false,
+            category: "SPAM",
+          },
+        }),
+        this.prisma.message.count({
+          where: {
+            ...mailboxScope(userId),
             isTrashed: false,
             category: { in: ["NEWSLETTERS", "PROMOTIONS"] },
           },
         }),
         this.prisma.sender.aggregate({
-          where: { userId },
+          where: mailboxScope(userId),
           _avg: { trustScore: true },
           _count: { _all: true },
         }),

@@ -1,3 +1,4 @@
+import "reflect-metadata";
 import { JobStatus, UnsubscribeMethod } from "@prisma/client";
 import { UnsubscribeService } from "./unsubscribe.service";
 

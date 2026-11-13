@@ -31,7 +31,7 @@ void main() {
       await _openDetails(tester, repository, isRead: false);
 
       expect(actionCalls, 0);
-      expect(find.text('New message'), findsOneWidget);
+      expect(find.text('Read'), findsOneWidget);
       await tester.pump(const Duration(milliseconds: 1500));
       expect(actionCalls, 0);
 
@@ -43,8 +43,8 @@ void main() {
         'messageIds': ['message-1'],
         'isRead': true,
       });
-      expect(find.text('New message'), findsNothing);
-      expect(find.text('Read'), findsWidgets);
+      expect(find.text('Read'), findsNothing);
+      expect(find.text('Unread'), findsOneWidget);
     },
   );
 
@@ -110,7 +110,7 @@ void main() {
 
     expect(actionCalls, 1);
     expect(providerIsRead, isFalse);
-    expect(find.text('New message'), findsOneWidget);
+    expect(find.text('Read'), findsOneWidget);
   });
 }
 
@@ -126,12 +126,17 @@ Future<void> _openDetails(
   await tester.pumpWidget(
     MaterialApp(
       theme: AppTheme.light(),
-      onGenerateRoute: (_) => MaterialPageRoute<void>(
-        settings: RouteSettings(arguments: _message(isRead)),
-        builder: (_) => EmailDetailsScreen(repository: repository),
-      ),
+      home: const Scaffold(body: Text('Inbox')),
     ),
   );
+  tester
+      .state<NavigatorState>(find.byType(Navigator))
+      .push(
+        MaterialPageRoute<void>(
+          settings: RouteSettings(arguments: _message(isRead)),
+          builder: (_) => EmailDetailsScreen(repository: repository),
+        ),
+      );
   await tester.pumpAndSettle();
 }
 

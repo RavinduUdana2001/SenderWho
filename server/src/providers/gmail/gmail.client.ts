@@ -1,4 +1,5 @@
 import { BadGatewayException, Injectable } from "@nestjs/common";
+import { ProviderRetryError } from "../../common/provider-retry.error";
 
 export interface GmailProfile {
   emailAddress: string;
@@ -57,15 +58,115 @@ export interface GmailBatchMessageResult {
   id: string;
   message?: GmailMessage;
   status: number;
+  errorReason?: string;
+  retryAfterMs?: number;
 }
 
-export class GmailApiError extends Error {
+export class GmailApiError extends ProviderRetryError {
   constructor(
     readonly status: number,
     message: string,
+    readonly reason?: string,
+    retryAfterMs = 0,
   ) {
-    super(message);
+    super(message, retryAfterMs);
     this.name = "GmailApiError";
+  }
+}
+
+// Keep provider diagnostics structured; do not expose raw response messages,
+// which may contain mailbox identifiers or request details.
+export function gmailApiError(
+  status: number,
+  reason?: string,
+  retryAfterMs = 0,
+): GmailApiError {
+  const limited =
+    status === 429 ||
+    reason === "rateLimitExceeded" ||
+    reason === "userRateLimitExceeded" ||
+    reason === "dailyLimitExceeded";
+  let message: string;
+  switch (reason) {
+    case "rateLimitExceeded":
+    case "userRateLimitExceeded":
+      message =
+        "Gmail is busy. Your saved mail is still available. Sync can continue after a short pause.";
+      break;
+    case "dailyLimitExceeded":
+      message =
+        "Gmail's daily API limit has been reached. Try scanning later or contact SenderWho support.";
+      break;
+    case "insufficientPermissions":
+    case "ACCESS_TOKEN_SCOPE_INSUFFICIENT":
+      message =
+        "Gmail access needs to be renewed. Reconnect this mailbox and allow SenderWho to read and manage your mail.";
+      break;
+    case "accessNotConfigured":
+    case "SERVICE_DISABLED":
+      message =
+        "The SenderWho Gmail API is not enabled. Contact SenderWho support to restore scanning.";
+      break;
+    case "domainPolicy":
+      message =
+        "Your Google Workspace administrator does not allow SenderWho to access Gmail. Ask your administrator to allow the app.";
+      break;
+    default:
+      message = limited
+        ? "Gmail is busy. Your saved mail is still available. Sync can continue after a short pause."
+        : status === 403
+          ? "Gmail could not allow access to this mailbox. Reconnect Gmail to review permissions. If it still fails, contact SenderWho support."
+          : status === 401
+            ? "Gmail access has expired. Reconnect this mailbox to continue scanning."
+            : "Gmail could not complete the sync. Your saved mail is still available.";
+  }
+  return new GmailApiError(
+    status,
+    message,
+    reason,
+    limited
+      ? Math.max(
+          reason === "dailyLimitExceeded" ? 60 * 60_000 : 60_000,
+          retryAfterMs,
+        )
+      : retryAfterMs,
+  );
+}
+
+export function gmailRetryAfterMs(value: string | null): number {
+  if (!value) return 0;
+  const seconds = Number(value);
+  const delay = Number.isFinite(seconds)
+    ? seconds * 1_000
+    : Date.parse(value) - Date.now();
+  return Number.isFinite(delay)
+    ? Math.max(0, Math.min(delay, 24 * 60 * 60_000))
+    : 0;
+}
+
+function errorReason(payload: unknown): string | undefined {
+  if (typeof payload !== "object" || payload === null) return;
+  const error = (
+    payload as {
+      error?: {
+        errors?: Array<{ reason?: unknown }>;
+        details?: Array<{ reason?: unknown }>;
+      };
+    }
+  ).error;
+  const reason =
+    error?.errors?.[0]?.reason ??
+    error?.details?.find((item) => typeof item.reason === "string")?.reason;
+  return typeof reason === "string" && /^[a-zA-Z_]{1,80}$/.test(reason)
+    ? reason
+    : undefined;
+}
+
+function parseErrorReason(source: string): string | undefined {
+  try {
+    return errorReason(JSON.parse(source));
+  } catch {
+    return undefined;
   }
 }
 
@@ -123,7 +224,8 @@ export class GmailClient {
       const batch = await this.requestMessagesBatch(accessToken, pendingIds);
       const retryIds: string[] = [];
       for (const result of batch) {
-        if (this.isRetryableStatus(result.status)) {
+        if (this.isRetryableStatus(result.status, result.errorReason)) {
+          results.set(result.id, result);
           retryIds.push(result.id);
         } else {
           results.set(result.id, result);
@@ -131,13 +233,28 @@ export class GmailClient {
       }
       pendingIds = retryIds;
       if (pendingIds.length > 0 && attempt < GmailClient.maxAttempts) {
-        await this.waitBeforeRetry(attempt);
+        const retryAfterMs = Math.max(
+          0,
+          ...batch.map((item) => item.retryAfterMs ?? 0),
+        );
+        // Long cooldowns belong in the durable queue, not in a sleeping worker.
+        if (retryAfterMs >= 60_000) break;
+        await this.waitBeforeRetry(
+          attempt,
+          retryAfterMs ? String(retryAfterMs / 1_000) : undefined,
+        );
       }
     }
     for (const id of pendingIds) {
-      results.set(id, { id, status: 429 });
+      results.set(id, results.get(id) ?? { id, status: 429 });
     }
-    return messageIds.map((id) => results.get(id) ?? { id, status: 502 });
+    const ordered = messageIds.map(
+      (id) => results.get(id) ?? { id, status: 502 },
+    );
+    // Let the caller refresh the account token once for an expired batch item.
+    if (ordered.some((result) => result.status === 401))
+      throw gmailApiError(401);
+    return ordered;
   }
 
   private async requestMessagesBatch(
@@ -173,13 +290,20 @@ export class GmailClient {
     } catch {
       throw new BadGatewayException("Could not reach the Gmail batch API.");
     }
-    if (this.isRetryableStatus(response.status)) {
-      return messageIds.map((id) => ({ id, status: response.status }));
-    }
     if (!response.ok) {
-      throw new GmailApiError(
+      const reason = parseErrorReason(await response.text());
+      if (this.isRetryableStatus(response.status, reason)) {
+        return messageIds.map((id) => ({
+          id,
+          status: response.status,
+          errorReason: reason,
+          retryAfterMs: gmailRetryAfterMs(response.headers.get("retry-after")),
+        }));
+      }
+      throw gmailApiError(
         response.status,
-        `Gmail batch request failed with status ${response.status}.`,
+        reason,
+        gmailRetryAfterMs(response.headers.get("retry-after")),
       );
     }
 
@@ -207,7 +331,19 @@ export class GmailClient {
         part.match(/\bHTTP\/1\.[01]\s+(\d{3})\b/)?.[1] ?? 502,
       );
       if (status < 200 || status >= 300) {
-        return { id: messageIds[index], status };
+        const jsonStart = part.indexOf("{", part.indexOf("HTTP/"));
+        const jsonEnd = part.lastIndexOf("}");
+        return {
+          id: messageIds[index],
+          status,
+          errorReason:
+            jsonStart >= 0
+              ? parseErrorReason(part.slice(jsonStart, jsonEnd + 1))
+              : undefined,
+          retryAfterMs: gmailRetryAfterMs(
+            part.match(/(?:^|\r?\n)Retry-After:\s*([^\r\n]+)/i)?.[1] ?? null,
+          ),
+        };
       }
       const jsonStart = part.indexOf("{", part.indexOf("HTTP/"));
       const jsonEnd = part.lastIndexOf("}");
@@ -331,9 +467,14 @@ export class GmailClient {
         return body.trim() ? (JSON.parse(body) as T) : (undefined as T);
       }
 
+      const reason = parseErrorReason(await response.text());
+      const retryAfterMs = gmailRetryAfterMs(
+        response.headers.get("retry-after"),
+      );
       if (
-        this.isRetryableStatus(response.status) &&
-        attempt < GmailClient.maxAttempts
+        this.isRetryableStatus(response.status, reason) &&
+        attempt < GmailClient.maxAttempts &&
+        retryAfterMs < 60_000
       ) {
         await this.waitBeforeRetry(
           attempt,
@@ -342,10 +483,7 @@ export class GmailClient {
         continue;
       }
 
-      throw new GmailApiError(
-        response.status,
-        `Gmail API request failed with status ${response.status}.`,
-      );
+      throw gmailApiError(response.status, reason, retryAfterMs);
     }
 
     throw new BadGatewayException("Gmail API request failed.");
@@ -384,7 +522,12 @@ export class GmailClient {
     return new Promise((resolve) => setTimeout(resolve, delay));
   }
 
-  private isRetryableStatus(status: number) {
-    return status === 429 || status >= 500;
+  private isRetryableStatus(status: number, reason?: string) {
+    return (
+      status === 429 ||
+      status >= 500 ||
+      (status === 403 &&
+        (reason === "rateLimitExceeded" || reason === "userRateLimitExceeded"))
+    );
   }
 }

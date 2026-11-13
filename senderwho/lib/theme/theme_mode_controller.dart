@@ -5,11 +5,34 @@ class ThemeModeController extends InheritedWidget {
     super.key,
     required this.mode,
     required this.setThemeMode,
+    this.updateThemeMode,
     required super.child,
   });
 
   final ThemeMode mode;
   final ValueChanged<ThemeMode> setThemeMode;
+  final Future<bool> Function(ThemeMode mode, Future<bool> Function() save)?
+  updateThemeMode;
+
+  static ThemeModeController? maybeOf(BuildContext context) =>
+      context.dependOnInheritedWidgetOfExactType<ThemeModeController>();
+
+  Future<bool> changeThemeMode(
+    ThemeMode next, {
+    required Future<bool> Function() save,
+  }) async {
+    if (updateThemeMode != null) return updateThemeMode!(next, save);
+    final previous = mode;
+    setThemeMode(next);
+    var saved = false;
+    try {
+      saved = await save();
+    } on Object {
+      saved = false;
+    }
+    if (!saved) setThemeMode(previous);
+    return saved;
+  }
 
   static ThemeModeController of(BuildContext context) {
     final controller = context

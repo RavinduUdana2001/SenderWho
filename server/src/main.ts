@@ -6,7 +6,13 @@ import compression from "compression";
 import { createConnection } from "node:net";
 import type { NextFunction, Request, Response } from "express";
 import { json, urlencoded } from "express";
-import helmet from "helmet";
+import { ProductionLogger } from "./common/security/production-logger";
+import { browserSecurity } from "./common/security/browser-security";
+import {
+  rejectDuplicateParameters,
+  verifyJsonParameters,
+  verifyFormParameters,
+} from "./common/security/request-parameters";
 import { applyMysqlMigrations } from "./common/database/mysql-migrations";
 import {
   resolveDatabaseTcpEndpoint,
@@ -48,6 +54,7 @@ async function bootstrap() {
   const apiPrefix = config.get<string>("apiPrefix", "api/v1");
   const corsOrigins = config.get<string[]>("corsOrigins", []);
   const isProduction = config.get<string>("nodeEnv") === "production";
+  if (isProduction) app.useLogger(new ProductionLogger());
   const trustedProxyHops = config.get<number>("http.trustedProxyHops", 0);
   const requestBodyLimit = config.get<string>("http.requestBodyLimit", "256kb");
 
@@ -65,21 +72,7 @@ async function bootstrap() {
       { path: "delete-account", method: RequestMethod.GET },
     ],
   });
-  app.use(
-    helmet({
-      contentSecurityPolicy: {
-        directives: {
-          defaultSrc: ["'none'"],
-          styleSrc: ["'unsafe-inline'"],
-          baseUri: ["'none'"],
-          frameAncestors: ["'none'"],
-          formAction: ["'none'"],
-        },
-      },
-      crossOriginResourcePolicy: { policy: "same-site" },
-      referrerPolicy: { policy: "no-referrer" },
-    }),
-  );
+  app.use(browserSecurity());
   app.use((_request: Request, response: Response, next: NextFunction) => {
     response.setHeader("Cache-Control", "no-store, max-age=0");
     response.setHeader("Pragma", "no-cache");
@@ -95,8 +88,21 @@ async function bootstrap() {
       });
     });
   }
-  app.use(json({ limit: requestBodyLimit, strict: true }));
-  app.use(urlencoded({ extended: false, limit: requestBodyLimit }));
+  app.use(rejectDuplicateParameters);
+  app.use(
+    json({
+      limit: requestBodyLimit,
+      strict: true,
+      verify: verifyJsonParameters,
+    }),
+  );
+  app.use(
+    urlencoded({
+      extended: false,
+      limit: requestBodyLimit,
+      verify: verifyFormParameters,
+    }),
+  );
   app.enableCors({
     origin: corsOrigins.length > 0 ? corsOrigins : !isProduction,
     credentials: false,
@@ -144,20 +150,6 @@ async function bootstrap() {
 }
 
 void bootstrap().catch((error: unknown) => {
-  const details =
-    error instanceof Error
-      ? { name: error.name, message: error.message, stack: error.stack }
-      : { message: String(error) };
-  const message = error instanceof Error ? error.message : String(error);
-  if (message.includes("Authentication failed against database server")) {
-    console.error(
-      JSON.stringify({
-        event: "database.authentication_failed",
-        diagnosis:
-          "MySQL was reachable but rejected the username/password. Verify the hPanel MySQL user assignment and that the deployed DB_PASSWORD is current.",
-      }),
-    );
-  }
   console.error(
     JSON.stringify({
       event: "application.startup_failed",
@@ -165,7 +157,7 @@ void bootstrap().catch((error: unknown) => {
       nodeVersion: process.version,
       platform: process.platform,
       architecture: process.arch,
-      ...details,
+      errorType: error instanceof Error ? error.name : "UnknownError",
     }),
   );
   process.exit(1);
@@ -196,12 +188,6 @@ function configureHostingerDatabaseUrl(): void {
     JSON.stringify({
       event: "database.configuration.loaded",
       source: "separate_variables",
-      host,
-      port,
-      user,
-      database,
-      passwordLength: password.length,
-      passwordHasLeadingOrTrailingWhitespace: password !== password.trim(),
     }),
   );
 }
@@ -227,8 +213,6 @@ async function checkDatabaseTcpConnection(): Promise<void> {
       console.log(
         JSON.stringify({
           event: "database.tcp_connection.succeeded",
-          host,
-          port,
           durationMs: Date.now() - startedAt,
         }),
       );

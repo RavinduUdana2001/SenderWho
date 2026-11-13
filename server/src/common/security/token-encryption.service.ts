@@ -22,6 +22,16 @@ export class TokenEncryptionService {
   constructor(private readonly config: ConfigService) {}
 
   encrypt(value: string, context = DEFAULT_CONTEXT): string {
+    try {
+      return this.encryptValue(value, context);
+    } catch {
+      throw new ServiceUnavailableException(
+        "Secure credential processing failed.",
+      );
+    }
+  }
+
+  private encryptValue(value: string, context: string): string {
     const { id: keyId, key } = this.getActiveKey();
     const iv = randomBytes(IV_LENGTH);
     const cipher = createCipheriv(ALGORITHM, key, iv);
@@ -42,8 +52,19 @@ export class TokenEncryptionService {
   }
 
   decrypt(payload: string, context = DEFAULT_CONTEXT): string {
+    try {
+      return this.decryptValue(payload, context);
+    } catch {
+      throw new ServiceUnavailableException(
+        "Secure credential processing failed.",
+      );
+    }
+  }
+
+  private decryptValue(payload: string, context: string): string {
     const parts = payload.split(".");
     if (parts[0] === LEGACY_VERSION) return this.decryptLegacy(parts);
+    if (parts.length !== 5) throw new Error("Invalid format");
     const [version, keyId, ivValue, tagValue, encryptedValue] = parts;
     if (
       version !== VERSION ||
@@ -75,11 +96,18 @@ export class TokenEncryptionService {
   }
 
   needsRotation(payload: string): boolean {
-    const [version, keyId] = payload.split(".");
-    return version !== VERSION || keyId !== this.getActiveKey().id;
+    try {
+      const [version, keyId] = payload.split(".");
+      return version !== VERSION || keyId !== this.getActiveKey().id;
+    } catch {
+      throw new ServiceUnavailableException(
+        "Secure credential processing failed.",
+      );
+    }
   }
 
   private decryptLegacy(parts: string[]): string {
+    if (parts.length !== 4) throw new Error("Invalid format");
     const [version, ivValue, tagValue, encryptedValue] = parts;
     if (
       version !== LEGACY_VERSION ||

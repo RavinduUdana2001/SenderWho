@@ -1,10 +1,11 @@
-import { Body, Controller, Get, Param, Post } from "@nestjs/common";
+import { Body, Controller, Get, Param, Post, Query } from "@nestjs/common";
 import { CurrentUser } from "../auth/current-user.decorator";
 import { Throttle } from "@nestjs/throttler";
 import { Idempotent } from "../common/security/idempotent.decorator";
 import { CreateUnsubscribeJobDto } from "./dto/create-unsubscribe-job.dto";
 import { CreateUnsubscribeJobsDto } from "./dto/create-unsubscribe-jobs.dto";
 import { ListUnsubscribeJobStatusDto } from "./dto/list-unsubscribe-job-status.dto";
+import { ListUnsubscribeCandidatesDto } from "./dto/list-unsubscribe-candidates.dto";
 import { UnsubscribeService } from "./unsubscribe.service";
 
 @Controller("unsubscribe")
@@ -12,8 +13,11 @@ export class UnsubscribeController {
   constructor(private readonly unsubscribeService: UnsubscribeService) {}
 
   @Get("candidates")
-  getCandidates(@CurrentUser("id") userId: string) {
-    return this.unsubscribeService.getCandidates(userId);
+  getCandidates(
+    @CurrentUser("id") userId: string,
+    @Query() query: ListUnsubscribeCandidatesDto,
+  ) {
+    return this.unsubscribeService.getCandidates(userId, query);
   }
 
   @Post("jobs")

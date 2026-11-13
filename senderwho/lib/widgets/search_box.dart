@@ -8,6 +8,7 @@ class SearchBox extends StatelessWidget {
     this.hint = 'Search emails and senders...',
     this.controller,
     this.onSubmitted,
+    this.onChanged,
     this.onTap,
     this.trailing,
   });
@@ -15,16 +16,17 @@ class SearchBox extends StatelessWidget {
   final String hint;
   final TextEditingController? controller;
   final ValueChanged<String>? onSubmitted;
+  final ValueChanged<String>? onChanged;
   final VoidCallback? onTap;
   final Widget? trailing;
 
   @override
   Widget build(BuildContext context) {
     final field = Container(
-      height: 50,
+      constraints: const BoxConstraints(minHeight: 50),
       decoration: BoxDecoration(
-        color: AppColors.elevatedSurface(context),
-        borderRadius: BorderRadius.circular(15),
+        color: AppColors.trackFor(context),
+        borderRadius: BorderRadius.circular(24),
         border: Border.all(
           color: AppColors.borderFor(context).withValues(alpha: 0.86),
         ),
@@ -53,7 +55,17 @@ class SearchBox extends StatelessWidget {
             )
           : TextField(
               controller: controller,
-              onSubmitted: onSubmitted,
+              onSubmitted: (value) {
+                FocusScope.of(context).unfocus();
+                onSubmitted?.call(value);
+              },
+              onTapOutside: (_) => FocusScope.of(context).unfocus(),
+              keyboardAppearance: Theme.of(context).brightness,
+              autocorrect: false,
+              enableSuggestions: false,
+              textCapitalization: TextCapitalization.none,
+              scrollPadding: const EdgeInsets.all(24),
+              onChanged: onChanged,
               textInputAction: TextInputAction.search,
               style: Theme.of(context).textTheme.bodyLarge,
               decoration: InputDecoration(
@@ -68,7 +80,15 @@ class SearchBox extends StatelessWidget {
                   color: AppColors.primaryFor(context),
                 ),
                 suffixIcon: trailing,
-                contentPadding: const EdgeInsets.symmetric(vertical: 13),
+                isDense: true,
+                contentPadding: const EdgeInsets.symmetric(
+                  vertical: 14,
+                  horizontal: 16,
+                ),
+                prefixIconConstraints: const BoxConstraints(
+                  minWidth: 48,
+                  minHeight: 48,
+                ),
               ),
             ),
     );
@@ -76,7 +96,7 @@ class SearchBox extends StatelessWidget {
     return Material(
       color: Colors.transparent,
       child: InkWell(
-        borderRadius: BorderRadius.circular(15),
+        borderRadius: BorderRadius.circular(24),
         onTap: onTap,
         child: IgnorePointer(child: field),
       ),

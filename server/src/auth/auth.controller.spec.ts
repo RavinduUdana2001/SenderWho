@@ -24,6 +24,22 @@ describe("AuthController OAuth browser result", () => {
     expect(page).not.toContain("BadRequestException");
   });
 
+  it("revokes sessions for the authenticated user after a reported provider password change", async () => {
+    const revokeSessionsAfterProviderPasswordChange = jest
+      .fn()
+      .mockResolvedValue({ success: true, revokedSessions: 2 });
+    const controller = new AuthController({
+      revokeSessionsAfterProviderPasswordChange,
+    } as unknown as AuthService);
+
+    await expect(
+      controller.revokeSessionsAfterProviderPasswordChange("user-1"),
+    ).resolves.toEqual({ success: true, revokedSessions: 2 });
+    expect(revokeSessionsAfterProviderPasswordChange).toHaveBeenCalledWith(
+      "user-1",
+    );
+  });
+
   it("escapes provider data in the result page", () => {
     const page = oauthResultPage(
       true,

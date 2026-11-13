@@ -88,6 +88,6 @@ abstract final class AppTypography {
         fontWeight: FontWeight.w600,
         color: muted,
       ),
-    );
+    ).apply(fontFamily: fontFamily, fontFamilyFallback: fontFamilyFallback);
   }
 }

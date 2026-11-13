@@ -3,14 +3,16 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 
 import '../models/app_models.dart';
+import '../utils/mail_date.dart';
 import '../services/senderwho_repository.dart';
+import '../services/repository_scope.dart';
 import '../theme/app_colors.dart';
-import '../utils/responsive.dart';
 import '../widgets/app_card.dart';
 import '../widgets/app_chips.dart';
 import '../widgets/app_header.dart';
+import '../widgets/mail_avatar.dart';
+import '../widgets/mail_message_row.dart';
 import '../widgets/app_page.dart';
-import '../widgets/section_title.dart';
 import 'sender_details_screen.dart';
 
 class EmailDetailsScreen extends StatefulWidget {
@@ -44,9 +46,13 @@ class _EmailDetailsScreenState extends State<EmailDetailsScreen>
   final Set<String> _automaticReadHandledIds = <String>{};
 
   SenderWhoRepository get _repository =>
-      widget.repository ?? senderWhoRepository;
+      widget.repository ?? RepositoryScope.read(context);
 
-  bool get _interactionBusy => _busy || _automaticReadInFlightId != null;
+  int _contentRequest = 0;
+  int _detailsRequest = 0;
+
+  bool get _interactionBusy =>
+      _loading || _busy || _automaticReadInFlightId != null;
 
   @override
   void initState() {
@@ -90,7 +96,9 @@ class _EmailDetailsScreenState extends State<EmailDetailsScreen>
       });
       return;
     }
+    final request = ++_detailsRequest;
     setState(() => _loading = true);
+    unawaited(_loadContent(id));
     final thread = await _repository.getEmailThread(id);
     EmailItem? email;
     if (thread != null) {
@@ -100,21 +108,23 @@ class _EmailDetailsScreenState extends State<EmailDetailsScreen>
           break;
         }
       }
-      email ??= thread.items.isNotEmpty ? thread.items.last : null;
     }
     email ??= await _repository.getEmail(id);
-    if (!mounted) return;
+    if (!mounted || request != _detailsRequest || _id != id) return;
     final resolvedEmail = email ?? _email;
     setState(() {
       _loading = false;
       _email = resolvedEmail;
-      _thread = thread?.items ?? (email == null ? const [] : [email]);
+      _thread = thread?.items ?? const [];
+      if (resolvedEmail != null &&
+          !_thread.any((item) => item.id == resolvedEmail.id)) {
+        _thread = [..._thread, resolvedEmail];
+      }
       _error = email == null
           ? _repository.lastError ?? 'Message details could not be loaded.'
           : null;
     });
     _scheduleAutomaticRead(resolvedEmail);
-    if (resolvedEmail != null) await _loadContent(resolvedEmail.id);
   }
 
   void _selectThreadMessage(EmailItem email) {
@@ -204,16 +214,17 @@ class _EmailDetailsScreenState extends State<EmailDetailsScreen>
   }
 
   Future<void> _loadContent(String id) async {
+    final request = ++_contentRequest;
     setState(() {
       _contentLoading = true;
-      _content = null;
+      if (_content?.id != id) _content = null;
       _contentError = null;
     });
     final content = await _repository.getEmailContent(id);
-    if (!mounted || _id != id) return;
+    if (!mounted || _id != id || request != _contentRequest) return;
     setState(() {
       _contentLoading = false;
-      _content = content;
+      if (content != null) _content = content;
       _contentError = content == null
           ? _repository.lastError ??
                 'The full email message could not be loaded.'
@@ -232,9 +243,10 @@ class _EmailDetailsScreenState extends State<EmailDetailsScreen>
       final confirmed = await showDialog<bool>(
         context: context,
         builder: (context) => AlertDialog(
+          scrollable: true,
           title: const Text('Move this email to Trash?'),
           content: const Text(
-            'The message will be moved to Trash and can be restored later.',
+            'The message will be moved to Trash. You can restore it before your email provider permanently deletes it.',
           ),
           actions: [
             TextButton(
@@ -243,7 +255,10 @@ class _EmailDetailsScreenState extends State<EmailDetailsScreen>
             ),
             FilledButton(
               onPressed: () => Navigator.pop(context, true),
-              style: FilledButton.styleFrom(backgroundColor: AppColors.danger),
+              style: FilledButton.styleFrom(
+                backgroundColor: Theme.of(context).colorScheme.error,
+                foregroundColor: Theme.of(context).colorScheme.onError,
+              ),
               child: const Text('Move to Trash'),
             ),
           ],
@@ -281,6 +296,7 @@ class _EmailDetailsScreenState extends State<EmailDetailsScreen>
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
+        scrollable: true,
         title: Text('Unsubscribe from ${email?.sender ?? 'this sender'}?'),
         content: Text(
           'SenderWho will send a verified one-click unsubscribe request for ${email?.email ?? 'this sender'}. Existing email messages will remain.',
@@ -291,7 +307,10 @@ class _EmailDetailsScreenState extends State<EmailDetailsScreen>
             child: const Text('Cancel'),
           ),
           FilledButton(
-            style: FilledButton.styleFrom(backgroundColor: AppColors.danger),
+            style: FilledButton.styleFrom(
+              backgroundColor: Theme.of(context).colorScheme.error,
+              foregroundColor: Theme.of(context).colorScheme.onError,
+            ),
             onPressed: () => Navigator.pop(context, true),
             child: const Text('Unsubscribe'),
           ),
@@ -321,6 +340,7 @@ class _EmailDetailsScreenState extends State<EmailDetailsScreen>
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
+        scrollable: true,
         title: Text('Block ${email?.sender ?? 'this sender'}?'),
         content: const Text(
           'Future messages found during inbox scans will be moved to Trash. '
@@ -333,7 +353,10 @@ class _EmailDetailsScreenState extends State<EmailDetailsScreen>
           ),
           FilledButton.icon(
             onPressed: () => Navigator.pop(context, true),
-            style: FilledButton.styleFrom(backgroundColor: AppColors.danger),
+            style: FilledButton.styleFrom(
+              backgroundColor: Theme.of(context).colorScheme.error,
+              foregroundColor: Theme.of(context).colorScheme.onError,
+            ),
             icon: const Icon(Icons.block_rounded),
             label: const Text('Block sender'),
           ),
@@ -366,25 +389,94 @@ class _EmailDetailsScreenState extends State<EmailDetailsScreen>
     Navigator.pop(context, changed);
   }
 
+  Widget _toolbar(EmailItem email) => Row(
+    children: [
+      Expanded(
+        child: _MessageActionButton(
+          icon: email.isRead
+              ? Icons.mark_email_unread_outlined
+              : Icons.mark_email_read_outlined,
+          label: email.isRead ? 'Unread' : 'Read',
+          onTap: _interactionBusy
+              ? null
+              : () => _act('read-state', isRead: !email.isRead),
+        ),
+      ),
+      if (!email.isTrashed)
+        Expanded(
+          child: _MessageActionButton(
+            icon: email.isArchived
+                ? Icons.unarchive_outlined
+                : Icons.archive_outlined,
+            label: email.isArchived ? 'Inbox' : 'Archive',
+            onTap: _interactionBusy
+                ? null
+                : () => _act(email.isArchived ? 'unarchive' : 'archive'),
+          ),
+        ),
+      Expanded(
+        child: _MessageActionButton(
+          icon: email.isTrashed
+              ? Icons.restore_from_trash_outlined
+              : Icons.delete_outline_rounded,
+          label: email.isTrashed ? 'Restore' : 'Trash',
+          onTap: _interactionBusy
+              ? null
+              : () => _act(email.isTrashed ? 'restore' : 'trash'),
+        ),
+      ),
+      if (email.canUnsubscribe || email.senderId?.isNotEmpty == true)
+        PopupMenuButton<String>(
+          tooltip: 'More message actions',
+          enabled: !_interactionBusy,
+          onSelected: (action) {
+            if (action == 'unsubscribe') _unsubscribe();
+            if (action == 'block') _blockSender();
+          },
+          itemBuilder: (_) => [
+            if (email.canUnsubscribe && !email.isTrashed)
+              const PopupMenuItem(
+                value: 'unsubscribe',
+                child: Text('Unsubscribe from this sender'),
+              ),
+            if (email.senderId?.isNotEmpty == true)
+              const PopupMenuItem(
+                value: 'block',
+                child: Text('Block this sender'),
+              ),
+          ],
+        ),
+    ],
+  );
+
   @override
   Widget build(BuildContext context) {
     final email = _email;
     return PopScope(
-      canPop: !_changed,
+      canPop: true,
       onPopInvokedWithResult: (didPop, result) {
-        if (!didPop) _leaveDetails();
+        if (didPop) _automaticReadTimer?.cancel();
       },
       child: AppPage(
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
+        maxContentWidth: 780,
+        header: Column(
           children: [
             AppHeader(
               title: 'Message',
-              subtitle: email?.date,
+              subtitle: email == null
+                  ? null
+                  : formatMailDate(email.date, detailed: true),
               showBack: true,
               onBack: _leaveDetails,
             ),
-            SizedBox(height: context.gap(18)),
+            if (email != null) _toolbar(email),
+            if (_loading && email != null)
+              const LinearProgressIndicator(minHeight: 2),
+          ],
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
             if (_loading && email == null)
               const _MessageDetailsSkeleton()
             else if (email == null)
@@ -416,157 +508,67 @@ class _EmailDetailsScreenState extends State<EmailDetailsScreen>
                 ),
               )
             else ...[
-              AppCard(
-                padding: const EdgeInsets.all(20),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
+              const SizedBox(height: 16),
+              Text(
+                email.subject.isEmpty ? '(No subject)' : email.subject,
+                style: Theme.of(context).textTheme.headlineSmall,
+              ),
+              const SizedBox(height: 18),
+              Row(
+                children: [
+                  MailAvatar(name: email.sender),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          email.sender,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: Theme.of(context).textTheme.titleMedium,
+                        ),
+                        Text(
+                          email.email,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: Theme.of(context).textTheme.bodySmall,
+                        ),
+                      ],
+                    ),
+                  ),
+                  if (email.senderId?.isNotEmpty == true &&
+                      MediaQuery.textScalerOf(context).scale(14) <= 18)
+                    TextButton(
+                      onPressed: () => _openSenderDetails(email.senderId!),
+                      child: const Text('View sender'),
+                    ),
+                ],
+              ),
+              if (email.senderId?.isNotEmpty == true &&
+                  MediaQuery.textScalerOf(context).scale(14) > 18)
+                Align(
+                  alignment: Alignment.centerRight,
+                  child: TextButton(
+                    onPressed: () => _openSenderDetails(email.senderId!),
+                    child: const Text('View sender'),
+                  ),
+                ),
+              if (email.identityStatus == 'SUSPICIOUS') ...[
+                const SizedBox(height: 12),
+                Row(
                   children: [
-                    Row(
-                      children: [
-                        StatusChip(
-                          label: email.category,
-                          color: AppColors.indigo,
-                        ),
-                        const Spacer(),
-                        if (!email.isRead)
-                          const StatusChip(
-                            label: 'New message',
-                            color: AppColors.primary,
-                          ),
-                      ],
+                    Icon(
+                      Icons.warning_amber_rounded,
+                      size: 18,
+                      color: Theme.of(context).colorScheme.error,
                     ),
-                    const SizedBox(height: 16),
-                    Text(
-                      email.subject,
-                      style: Theme.of(context).textTheme.headlineSmall,
-                    ),
-                    const SizedBox(height: 18),
-                    Divider(color: AppColors.borderFor(context)),
-                    const SizedBox(height: 16),
-                    InkWell(
-                      onTap: email.senderId?.isNotEmpty == true
-                          ? () => _openSenderDetails(email.senderId!)
-                          : null,
-                      borderRadius: BorderRadius.circular(16),
-                      child: Padding(
-                        padding: const EdgeInsets.symmetric(vertical: 2),
-                        child: Row(
-                          children: [
-                            Container(
-                              width: 48,
-                              height: 48,
-                              alignment: Alignment.center,
-                              decoration: BoxDecoration(
-                                color: AppColors.softFill(
-                                  context,
-                                  AppColors.primary,
-                                ),
-                                borderRadius: BorderRadius.circular(16),
-                              ),
-                              child: Text(
-                                email.sender.isEmpty
-                                    ? '?'
-                                    : email.sender[0].toUpperCase(),
-                                style: const TextStyle(
-                                  color: AppColors.primary,
-                                  fontSize: 17,
-                                  fontWeight: FontWeight.w800,
-                                ),
-                              ),
-                            ),
-                            const SizedBox(width: 12),
-                            Expanded(
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  Text(
-                                    email.sender,
-                                    maxLines: 1,
-                                    overflow: TextOverflow.ellipsis,
-                                    style: Theme.of(
-                                      context,
-                                    ).textTheme.titleMedium,
-                                  ),
-                                  const SizedBox(height: 2),
-                                  Text(
-                                    email.email,
-                                    maxLines: 1,
-                                    overflow: TextOverflow.ellipsis,
-                                    style: Theme.of(
-                                      context,
-                                    ).textTheme.bodySmall,
-                                  ),
-                                ],
-                              ),
-                            ),
-                            if (email.senderId?.isNotEmpty == true) ...[
-                              const SizedBox(width: 8),
-                              Column(
-                                crossAxisAlignment: CrossAxisAlignment.end,
-                                children: [
-                                  Text(
-                                    'View sender',
-                                    style: Theme.of(context)
-                                        .textTheme
-                                        .labelSmall
-                                        ?.copyWith(color: AppColors.primary),
-                                  ),
-                                  const SizedBox(height: 3),
-                                  const Icon(
-                                    Icons.chevron_right_rounded,
-                                    size: 19,
-                                    color: AppColors.primary,
-                                  ),
-                                ],
-                              ),
-                            ],
-                          ],
-                        ),
-                      ),
-                    ),
-                    const SizedBox(height: 15),
-                    Wrap(
-                      spacing: 7,
-                      runSpacing: 7,
-                      children: [
-                        StatusChip(
-                          label: email.isRead ? 'Read' : 'Unread',
-                          color: email.isRead
-                              ? AppColors.mutedFor(context)
-                              : AppColors.primary,
-                        ),
-                        StatusChip(
-                          label: email.category,
-                          color: AppColors.indigo,
-                        ),
-                        if (email.isArchived)
-                          const StatusChip(
-                            label: 'Archived',
-                            color: AppColors.success,
-                          ),
-                        if (email.isTrashed)
-                          const StatusChip(
-                            label: 'Trash',
-                            color: AppColors.danger,
-                          ),
-                        if (email.hasAttachments)
-                          const StatusChip(
-                            label: 'Attachment',
-                            color: AppColors.warning,
-                          ),
-                      ],
-                    ),
-                    const SizedBox(height: 14),
-                    Text(
-                      'Delivered to ${email.accountEmail}',
-                      style: Theme.of(context).textTheme.labelSmall,
-                    ),
+                    const SizedBox(width: 8),
+                    const Expanded(child: Text('Sender identity needs review')),
                   ],
                 ),
-              ),
-              SizedBox(height: context.gap(22)),
-              const SectionTitle(title: 'Selected message'),
-              const SizedBox(height: 10),
+              ],
+              const SizedBox(height: 16),
               _SelectedMessageContent(
                 email: email,
                 content: _content,
@@ -574,131 +576,19 @@ class _EmailDetailsScreenState extends State<EmailDetailsScreen>
                 error: _contentError,
                 onRetry: () => _loadContent(email.id),
               ),
-              SizedBox(height: context.gap(22)),
-              SectionTitle(
-                title:
-                    'Conversation · ${_thread.isEmpty ? 1 : _thread.length} message${(_thread.isEmpty ? 1 : _thread.length) == 1 ? '' : 's'}',
-              ),
-              const SizedBox(height: 10),
-              for (final threadMessage
-                  in (_thread.isEmpty ? <EmailItem>[email] : _thread)) ...[
-                _ConversationMessageCard(
-                  message: threadMessage,
-                  selected: threadMessage.id == email.id,
-                  onTap: () => _selectThreadMessage(threadMessage),
-                ),
-                const SizedBox(height: 10),
-              ],
-              Container(
-                padding: const EdgeInsets.all(12),
-                decoration: BoxDecoration(
-                  color: AppColors.trackFor(context),
-                  borderRadius: BorderRadius.circular(13),
-                ),
-                child: Row(
-                  crossAxisAlignment: CrossAxisAlignment.start,
+              if (_thread.length > 1) ...[
+                const SizedBox(height: 20),
+                ExpansionTile(
+                  title: Text('Conversation · ${_thread.length} messages'),
+                  tilePadding: EdgeInsets.zero,
                   children: [
-                    Icon(
-                      Icons.shield_outlined,
-                      size: 17,
-                      color: AppColors.mutedFor(context),
-                    ),
-                    const SizedBox(width: 9),
-                    Expanded(
-                      child: Text(
-                        'SenderWho stores email metadata and a short preview—not the full message body. Actions below apply to the selected message.',
-                        style: Theme.of(context).textTheme.bodySmall,
+                    for (final message in _thread)
+                      _ConversationMessageCard(
+                        message: message,
+                        selected: message.id == email.id,
+                        onTap: () => _selectThreadMessage(message),
                       ),
-                    ),
                   ],
-                ),
-              ),
-              SizedBox(height: context.gap(22)),
-              const SectionTitle(title: 'Email actions'),
-              const SizedBox(height: 10),
-              AppCard(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 8,
-                  vertical: 12,
-                ),
-                child: Row(
-                  children: [
-                    Expanded(
-                      child: _MessageActionButton(
-                        icon: email.isRead
-                            ? Icons.mark_email_unread_outlined
-                            : Icons.mark_email_read_outlined,
-                        label: email.isRead ? 'Unread' : 'Read',
-                        onTap: _interactionBusy
-                            ? null
-                            : () => _act('read-state', isRead: !email.isRead),
-                      ),
-                    ),
-                    if (!email.isTrashed) ...[
-                      Container(
-                        width: 1,
-                        height: 38,
-                        color: AppColors.borderFor(context),
-                      ),
-                      Expanded(
-                        child: _MessageActionButton(
-                          icon: email.isArchived
-                              ? Icons.unarchive_outlined
-                              : Icons.archive_outlined,
-                          label: email.isArchived ? 'Inbox' : 'Archive',
-                          onTap: _interactionBusy
-                              ? null
-                              : () => _act(
-                                  email.isArchived ? 'unarchive' : 'archive',
-                                ),
-                        ),
-                      ),
-                    ],
-                    Container(
-                      width: 1,
-                      height: 38,
-                      color: AppColors.borderFor(context),
-                    ),
-                    Expanded(
-                      child: _MessageActionButton(
-                        icon: email.isTrashed
-                            ? Icons.restore_from_trash_outlined
-                            : Icons.delete_outline_rounded,
-                        label: email.isTrashed ? 'Restore' : 'Trash',
-                        color: email.isTrashed
-                            ? AppColors.primary
-                            : AppColors.danger,
-                        onTap: _interactionBusy
-                            ? null
-                            : () => _act(email.isTrashed ? 'restore' : 'trash'),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-              if (email.canUnsubscribe && !email.isTrashed) ...[
-                const SizedBox(height: 12),
-                SizedBox(
-                  width: double.infinity,
-                  child: OutlinedButton.icon(
-                    onPressed: _interactionBusy ? null : _unsubscribe,
-                    icon: const Icon(Icons.unsubscribe_rounded),
-                    label: const Text('Unsubscribe from this sender'),
-                  ),
-                ),
-              ],
-              if (email.senderId?.isNotEmpty == true) ...[
-                const SizedBox(height: 10),
-                SizedBox(
-                  width: double.infinity,
-                  child: OutlinedButton.icon(
-                    onPressed: _interactionBusy ? null : _blockSender,
-                    style: OutlinedButton.styleFrom(
-                      foregroundColor: AppColors.danger,
-                    ),
-                    icon: const Icon(Icons.block_rounded),
-                    label: const Text('Block this sender'),
-                  ),
                 ),
               ],
               if (_interactionBusy) ...[
@@ -734,11 +624,13 @@ class _SelectedMessageContent extends StatelessWidget {
   Widget build(BuildContext context) {
     final message = content;
     return AppCard(
-      padding: const EdgeInsets.all(18),
+      padding: EdgeInsets.zero,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          if (loading) ...[
+          if (loading && message != null)
+            const LinearProgressIndicator(minHeight: 2),
+          if (loading && message == null) ...[
             const LinearProgressIndicator(
               minHeight: 2,
               borderRadius: BorderRadius.all(Radius.circular(999)),
@@ -769,7 +661,7 @@ class _SelectedMessageContent extends StatelessWidget {
                       const SizedBox(height: 9),
                       Text(
                         email.snippet.isEmpty
-                            ? 'No stored preview is available.'
+                            ? 'No message preview is available.'
                             : email.snippet,
                         style: Theme.of(context).textTheme.bodyLarge,
                       ),
@@ -785,15 +677,6 @@ class _SelectedMessageContent extends StatelessWidget {
               label: const Text('Try loading again'),
             ),
           ] else ...[
-            _MessageHeaderLine(label: 'From', value: message.from),
-            _MessageHeaderLine(label: 'To', value: message.to),
-            if (message.cc.isNotEmpty)
-              _MessageHeaderLine(label: 'Cc', value: message.cc),
-            if (message.date.isNotEmpty)
-              _MessageHeaderLine(label: 'Date', value: message.date),
-            const SizedBox(height: 12),
-            Divider(color: AppColors.borderFor(context)),
-            const SizedBox(height: 14),
             SelectableText(
               message.bodyText.isEmpty
                   ? 'This email message does not contain a readable text body.'
@@ -802,6 +685,20 @@ class _SelectedMessageContent extends StatelessWidget {
                 context,
               ).textTheme.bodyLarge?.copyWith(height: 1.55),
             ),
+            const SizedBox(height: 18),
+            ExpansionTile(
+              title: const Text('Message details'),
+              tilePadding: EdgeInsets.zero,
+              children: [
+                _MessageHeaderLine(label: 'From', value: message.from),
+                _MessageHeaderLine(label: 'To', value: message.to),
+                if (message.cc.isNotEmpty)
+                  _MessageHeaderLine(label: 'Cc', value: message.cc),
+                if (message.date.isNotEmpty)
+                  _MessageHeaderLine(label: 'Date', value: message.date),
+              ],
+            ),
+            const SizedBox(height: 12),
             if (message.truncated) ...[
               const SizedBox(height: 12),
               const StatusChip(
@@ -883,102 +780,7 @@ class _ConversationMessageCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final initial = message.sender.trim().isEmpty
-        ? '?'
-        : message.sender.trim()[0].toUpperCase();
-    return AppCard(
-      onTap: onTap,
-      borderColor: selected ? AppColors.primary.withValues(alpha: 0.55) : null,
-      color: selected ? AppColors.softFill(context, AppColors.primary) : null,
-      padding: const EdgeInsets.all(16),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Container(
-                width: 40,
-                height: 40,
-                alignment: Alignment.center,
-                decoration: BoxDecoration(
-                  color: AppColors.softFill(context, AppColors.primary),
-                  borderRadius: BorderRadius.circular(13),
-                ),
-                child: Text(
-                  initial,
-                  style: const TextStyle(
-                    color: AppColors.primary,
-                    fontWeight: FontWeight.w800,
-                  ),
-                ),
-              ),
-              const SizedBox(width: 11),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      message.sender,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: Theme.of(context).textTheme.titleSmall,
-                    ),
-                    const SizedBox(height: 2),
-                    Text(
-                      message.email,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: Theme.of(context).textTheme.bodySmall,
-                    ),
-                  ],
-                ),
-              ),
-              const SizedBox(width: 8),
-              Column(
-                crossAxisAlignment: CrossAxisAlignment.end,
-                children: [
-                  Text(
-                    message.date,
-                    style: Theme.of(context).textTheme.labelSmall,
-                  ),
-                  const SizedBox(height: 5),
-                  if (!message.isRead)
-                    const StatusChip(label: 'Unread', color: AppColors.primary),
-                ],
-              ),
-            ],
-          ),
-          const SizedBox(height: 12),
-          Text(
-            message.subject,
-            maxLines: selected ? 2 : 1,
-            overflow: TextOverflow.ellipsis,
-            style: Theme.of(
-              context,
-            ).textTheme.bodyLarge?.copyWith(fontWeight: FontWeight.w700),
-          ),
-          const SizedBox(height: 7),
-          Text(
-            message.snippet.isEmpty
-                ? 'No preview was included in this email message metadata.'
-                : message.snippet,
-            maxLines: selected ? 6 : 2,
-            overflow: TextOverflow.ellipsis,
-            style: Theme.of(context).textTheme.bodyMedium,
-          ),
-          if (selected) ...[
-            const SizedBox(height: 10),
-            Text(
-              'Selected · Delivered to ${message.accountEmail}',
-              style: Theme.of(
-                context,
-              ).textTheme.labelSmall?.copyWith(color: AppColors.primary),
-            ),
-          ],
-        ],
-      ),
-    );
+    return MailMessageRow(email: message, selected: selected, onTap: onTap);
   }
 }
 
@@ -987,47 +789,45 @@ class _MessageActionButton extends StatelessWidget {
     required this.icon,
     required this.label,
     required this.onTap,
-    this.color = AppColors.primary,
   });
 
   final IconData icon;
   final String label;
   final VoidCallback? onTap;
-  final Color color;
 
   @override
   Widget build(BuildContext context) {
-    final resolvedColor = AppColors.foregroundFor(context, color);
-    return InkWell(
-      borderRadius: BorderRadius.circular(14),
-      onTap: onTap,
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 7),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Container(
-              width: 38,
-              height: 38,
-              decoration: BoxDecoration(
-                color: AppColors.softFill(context, color),
-                borderRadius: BorderRadius.circular(12),
-              ),
-              child: Icon(icon, size: 19, color: resolvedColor),
-            ),
-            const SizedBox(height: 7),
-            Text(
-              label,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                color: onTap == null ? AppColors.mutedFor(context) : null,
-                fontWeight: FontWeight.w700,
-              ),
-            ),
-          ],
-        ),
+    final stacked = MediaQuery.textScalerOf(context).scale(14) > 18;
+    return TextButton(
+      onPressed: onTap,
+      style: TextButton.styleFrom(
+        foregroundColor: AppColors.textFor(context),
+        padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 8),
+        textStyle: Theme.of(context).textTheme.labelSmall,
       ),
+      child: stacked
+          ? Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(icon, size: 19),
+                const SizedBox(height: 4),
+                Text(label, maxLines: 1, overflow: TextOverflow.ellipsis),
+              ],
+            )
+          : Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(icon, size: 19),
+                const SizedBox(width: 6),
+                Flexible(
+                  child: Text(
+                    label,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+              ],
+            ),
     );
   }
 }

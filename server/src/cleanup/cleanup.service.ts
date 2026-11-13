@@ -1,3 +1,4 @@
+import { mailboxScope } from "../common/mailbox-scope";
 import {
   BadRequestException,
   ConflictException,
@@ -34,7 +35,7 @@ export class CleanupService {
 
   async getSuggestions(userId: string) {
     const suggestions = await this.prisma.cleanupSuggestion.findMany({
-      where: { userId },
+      where: mailboxScope(userId),
       orderBy: { messageCount: "desc" },
     });
 
@@ -280,7 +281,7 @@ export class CleanupService {
   async getActiveJobs(userId: string) {
     const jobs = await this.prisma.cleanupJob.findMany({
       where: {
-        userId,
+        ...mailboxScope(userId),
         status: { in: ACTIVE_CLEANUP_STATUSES },
       },
       select: {

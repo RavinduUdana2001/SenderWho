@@ -3,12 +3,14 @@ import 'package:flutter/material.dart';
 import '../models/app_models.dart';
 import '../screens/alert_details_screen.dart';
 import '../services/senderwho_repository.dart';
+import '../services/repository_scope.dart';
 import '../theme/app_colors.dart';
 import '../utils/responsive.dart';
 import '../widgets/app_card.dart';
 import '../widgets/app_async_state.dart';
 import '../widgets/app_chips.dart';
 import '../widgets/app_header.dart';
+import '../widgets/mail_list_surface.dart';
 import '../widgets/app_page.dart';
 import '../widgets/icon_bubble.dart';
 
@@ -34,7 +36,7 @@ class _SecurityAlertsScreenState extends State<SecurityAlertsScreen> {
   bool _hasMore = false;
 
   SenderWhoRepository get _repository =>
-      widget.repository ?? senderWhoRepository;
+      widget.repository ?? RepositoryScope.read(context);
 
   @override
   void initState() {
@@ -96,54 +98,26 @@ class _SecurityAlertsScreenState extends State<SecurityAlertsScreen> {
       return true;
     }).toList();
     return AppPage(
+      header: AppHeader(
+        title: 'Security Alerts',
+        subtitle: 'Review suspicious senders and identity risks',
+        action: IconButton(
+          tooltip: 'Refresh alerts',
+          onPressed: _loading ? null : () => _load(reset: true),
+          icon: const Icon(Icons.refresh_rounded, size: 20),
+        ),
+      ),
       child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          AppHeader(
-            title: 'Security Alerts',
-            subtitle: 'Review suspicious senders and identity risks',
-            action: IconButton.filledTonal(
-              tooltip: 'Refresh alerts',
-              onPressed: _loading ? null : () => _load(reset: true),
-              icon: const Icon(Icons.refresh_rounded, size: 20),
-            ),
-          ),
           SizedBox(height: context.gap(18)),
-          AppCard(
-            padding: const EdgeInsets.all(17),
-            child: Row(
-              children: [
-                const IconBubble(
-                  icon: Icons.warning_amber_rounded,
-                  color: AppColors.danger,
-                ),
-                const SizedBox(width: 14),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        '$_total alerts need review',
-                        style: Theme.of(context).textTheme.titleMedium,
-                      ),
-                      const SizedBox(height: 4),
-                      Text(
-                        'Review risky senders before opening email links.',
-                        style: Theme.of(context).textTheme.bodyMedium,
-                      ),
-                    ],
-                  ),
-                ),
-              ],
-            ),
+          Text(
+            '$_total alerts to review',
+            style: Theme.of(context).textTheme.labelMedium,
           ),
-          SizedBox(height: context.gap(16)),
+          const SizedBox(height: 10),
           Container(
-            padding: const EdgeInsets.all(4),
-            decoration: BoxDecoration(
-              color: AppColors.trackFor(context),
-              borderRadius: BorderRadius.circular(15),
-            ),
+            padding: EdgeInsets.zero,
             child: Row(
               children: [
                 _RiskTab(
@@ -151,11 +125,13 @@ class _SecurityAlertsScreenState extends State<SecurityAlertsScreen> {
                   selected: _risk == 'ALL',
                   onTap: () => setState(() => _risk = 'ALL'),
                 ),
+                const SizedBox(width: 6),
                 _RiskTab(
                   label: 'High Risk',
                   selected: _risk == 'HIGH',
                   onTap: () => setState(() => _risk = 'HIGH'),
                 ),
+                const SizedBox(width: 6),
                 _RiskTab(
                   label: 'Medium',
                   selected: _risk == 'MEDIUM',
@@ -183,11 +159,12 @@ class _SecurityAlertsScreenState extends State<SecurityAlertsScreen> {
                   const SizedBox(height: 13),
                   Text(
                     'No alerts in this filter',
+                    textAlign: TextAlign.center,
                     style: Theme.of(context).textTheme.titleMedium,
                   ),
                   const SizedBox(height: 5),
                   Text(
-                    'Your current email metadata has no matching security risks.',
+                    'No security alerts match this view.',
                     textAlign: TextAlign.center,
                     style: Theme.of(context).textTheme.bodyMedium,
                   ),
@@ -200,7 +177,7 @@ class _SecurityAlertsScreenState extends State<SecurityAlertsScreen> {
                 alert: alert,
                 onChanged: () => _load(reset: true),
               ),
-              const SizedBox(height: 10),
+              const Divider(height: 1),
             ],
           if (_inlineError != null) ...[
             AppAsyncError(
@@ -242,7 +219,7 @@ class SecurityAlertTile extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return AppCard(
-      padding: const EdgeInsets.all(16),
+      padding: const EdgeInsets.symmetric(vertical: 14),
       onTap: () async {
         final changed = await Navigator.pushNamed<dynamic>(
           context,
@@ -281,9 +258,14 @@ class SecurityAlertTile extends StatelessWidget {
                   ],
                 ),
               ),
-              StatusChip(label: alert.risk, color: alert.color),
+              if (MediaQuery.textScalerOf(context).scale(14) <= 18)
+                StatusChip(label: alert.risk, color: alert.color),
             ],
           ),
+          if (MediaQuery.textScalerOf(context).scale(14) > 18) ...[
+            const SizedBox(height: 8),
+            StatusChip(label: alert.risk, color: alert.color),
+          ],
           const SizedBox(height: 12),
           Row(
             children: [
@@ -328,29 +310,7 @@ class _RiskTab extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Expanded(
-      child: Material(
-        color: selected ? AppColors.surface(context) : Colors.transparent,
-        borderRadius: BorderRadius.circular(12),
-        child: InkWell(
-          onTap: onTap,
-          borderRadius: BorderRadius.circular(12),
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 9),
-            child: Text(
-              label,
-              textAlign: TextAlign.center,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                color: selected
-                    ? Theme.of(context).textTheme.bodyLarge?.color
-                    : AppColors.mutedFor(context),
-                fontWeight: selected ? FontWeight.w800 : FontWeight.w600,
-              ),
-            ),
-          ),
-        ),
-      ),
+      child: MailFilterTab(label: label, selected: selected, onTap: onTap),
     );
   }
 }

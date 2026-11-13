@@ -1,3 +1,4 @@
+import { mailboxScope } from "../common/mailbox-scope";
 import { Injectable } from "@nestjs/common";
 import { SenderCategory } from "@prisma/client";
 import { mockCategories } from "../common/mock/senderwho.mock";
@@ -49,7 +50,7 @@ export class CategoriesService {
 
     const grouped = await this.prisma.message.groupBy({
       by: ["category"],
-      where: { userId, isTrashed: false },
+      where: { ...mailboxScope(userId), isTrashed: false },
       _count: {
         _all: true,
       },

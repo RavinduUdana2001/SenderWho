@@ -3,15 +3,17 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 
 import '../models/app_models.dart';
+import '../services/api_transport.dart';
 import '../services/senderwho_repository.dart';
+import '../services/repository_scope.dart';
 import '../theme/app_colors.dart';
-import '../utils/responsive.dart';
-import '../widgets/app_button.dart';
 import '../widgets/app_async_state.dart';
 import '../widgets/app_card.dart';
+import '../widgets/mail_list_surface.dart';
+import '../widgets/search_box.dart';
 import '../widgets/app_header.dart';
 import '../widgets/app_page.dart';
-import '../widgets/icon_bubble.dart';
+import '../widgets/mail_avatar.dart';
 import 'sender_details_screen.dart';
 
 class UnsubscribeScreen extends StatefulWidget {
@@ -44,9 +46,21 @@ class _UnsubscribeScreenState extends State<UnsubscribeScreen> {
   Timer? _pollTimer;
   int _consecutivePollFailures = 0;
   bool _polling = false;
+  List<UnsubscribeCandidate> _lastCandidates = const [];
+  bool _selecting = false;
+  bool _showSearch = false;
+  String _filter = 'ALL';
+  final _query = TextEditingController();
+  final _selected = <String>{};
+  Timer? _searchDebounce;
+  RequestCancellation? _candidateCancellation;
+  int _candidateGeneration = 0, _page = 0, _total = 0;
+  bool _hasMore = false, _loadingMore = false;
+  String? _moreError;
+  String _appliedCandidateQuery = '', _appliedCandidateFilter = 'ALL';
 
   SenderWhoRepository get _repository =>
-      widget.repository ?? senderWhoRepository;
+      widget.repository ?? RepositoryScope.read(context);
 
   @override
   void initState() {
@@ -58,17 +72,118 @@ class _UnsubscribeScreenState extends State<UnsubscribeScreen> {
   @override
   void dispose() {
     _pollTimer?.cancel();
+    _searchDebounce?.cancel();
+    _candidateCancellation?.cancel();
+    _query.dispose();
     super.dispose();
   }
 
   bool get _hasActiveJobs => _jobs.values.any((job) => job.isActive);
 
   Future<List<UnsubscribeCandidate>> _loadCandidates() async {
-    final candidates = await _repository.getUnsubscribeCandidates();
-    for (final candidate in candidates) {
+    final generation = ++_candidateGeneration;
+    _candidateCancellation?.cancel();
+    final cancellation = _candidateCancellation = RequestCancellation();
+    final query = _query.text.trim(), filter = _filter;
+    _loadingMore = false;
+    _moreError = null;
+    final result = await _repository.getUnsubscribePage(
+      query: query,
+      filter: filter,
+      cancellation: cancellation,
+    );
+    if (!mounted || generation != _candidateGeneration) return _lastCandidates;
+    if (result == null) {
+      throw SenderWhoRequestException(
+        _repository.lastError ??
+            'Subscriptions could not be loaded. Try again.',
+      );
+    }
+    _page = result.page;
+    _appliedCandidateQuery = query;
+    _appliedCandidateFilter = filter;
+    _total = result.total;
+    _hasMore = result.hasMore;
+    _lastCandidates = result.items;
+    _remember(result);
+    return _lastCandidates;
+  }
+
+  void _remember(UnsubscribeCandidatePage result) {
+    for (final candidate in result.items) {
       _candidateCache[candidate.id] = candidate;
     }
-    return candidates;
+    for (final job in result.jobs) {
+      _jobs[job.senderId] = job;
+    }
+    if (_hasActiveJobs && !_polling) _schedulePoll();
+  }
+
+  void _changeCandidateFilters({bool debounce = false}) {
+    _searchDebounce?.cancel();
+    // Invalidate the prior request immediately, including while typing.
+    _candidateGeneration++;
+    _candidateCancellation?.cancel();
+    void apply() {
+      if (!mounted) return;
+      setState(() {
+        _selected.clear();
+        _selecting = false;
+        _page = 0;
+        _lastCandidates = const [];
+        _hasMore = false;
+        _total = 0;
+        _candidatesFuture = _loadCandidates();
+        _candidatesFuture.ignore();
+      });
+    }
+
+    if (debounce) {
+      _searchDebounce = Timer(const Duration(milliseconds: 300), apply);
+      setState(() {});
+    } else {
+      apply();
+    }
+  }
+
+  Future<void> _loadMore() async {
+    if (_loadingMore || !_hasMore) return;
+    if (_query.text.trim() != _appliedCandidateQuery ||
+        _filter != _appliedCandidateFilter) {
+      _changeCandidateFilters();
+      return;
+    }
+    final generation = _candidateGeneration;
+    final cancellation = _candidateCancellation;
+    setState(() {
+      _loadingMore = true;
+      _moreError = null;
+    });
+    final result = await _repository.getUnsubscribePage(
+      page: _page + 1,
+      query: _query.text,
+      filter: _filter,
+      cancellation: cancellation,
+    );
+    if (!mounted || generation != _candidateGeneration) return;
+    setState(() {
+      _loadingMore = false;
+      if (result == null) {
+        _moreError =
+            _repository.lastError ?? 'More subscriptions could not be loaded.';
+        return;
+      }
+      final byId = {
+        for (final item in _lastCandidates) item.id: item,
+        for (final item in result.items) item.id: item,
+      };
+      _lastCandidates = byId.values.toList();
+      _page = result.page;
+      _total = result.total;
+      _hasMore = result.hasMore;
+      _remember(result);
+      _candidatesFuture = Future.value(_lastCandidates);
+    });
   }
 
   Future<void> _restoreActiveJobs() async {
@@ -143,6 +258,7 @@ class _UnsubscribeScreenState extends State<UnsubscribeScreen> {
     final approved = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
+        scrollable: true,
         title: Text('Unsubscribe from ${items.length} senders?'),
         content: const Text(
           'SenderWho will ask each provider to stop future recurring email. Existing messages stay in your inbox and are never moved to Trash. Providers may take time to apply the request.',
@@ -154,7 +270,10 @@ class _UnsubscribeScreenState extends State<UnsubscribeScreen> {
           ),
           FilledButton(
             onPressed: () => Navigator.pop(context, true),
-            style: FilledButton.styleFrom(backgroundColor: AppColors.danger),
+            style: FilledButton.styleFrom(
+              backgroundColor: Theme.of(context).colorScheme.error,
+              foregroundColor: Theme.of(context).colorScheme.onError,
+            ),
             child: const Text('Unsubscribe'),
           ),
         ],
@@ -175,8 +294,12 @@ class _UnsubscribeScreenState extends State<UnsubscribeScreen> {
     setState(() {
       _busySenders.removeAll(items.map((item) => item.id));
       for (final job in result?.jobs ?? const <UnsubscribeJobInfo>[]) {
-        if (job.senderId.isNotEmpty) _jobs[job.senderId] = job;
+        if (job.senderId.isNotEmpty) {
+          _jobs[job.senderId] = job;
+          _selected.remove(job.senderId);
+        }
       }
+      if (_selected.isEmpty) _selecting = false;
       if (result != null) _consecutivePollFailures = 0;
     });
     if (result == null) {
@@ -211,6 +334,7 @@ class _UnsubscribeScreenState extends State<UnsubscribeScreen> {
     return showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
+        scrollable: true,
         title: Text('Unsubscribe from ${candidate.name}?'),
         content: Text(
           'SenderWho will ask this provider to stop future recurring email to your account. Existing messages stay in your inbox and are never moved to Trash. The provider may take time to apply it.',
@@ -222,7 +346,10 @@ class _UnsubscribeScreenState extends State<UnsubscribeScreen> {
           ),
           FilledButton(
             onPressed: () => Navigator.pop(context, true),
-            style: FilledButton.styleFrom(backgroundColor: AppColors.danger),
+            style: FilledButton.styleFrom(
+              backgroundColor: Theme.of(context).colorScheme.error,
+              foregroundColor: Theme.of(context).colorScheme.onError,
+            ),
             child: const Text('Unsubscribe'),
           ),
         ],
@@ -234,6 +361,7 @@ class _UnsubscribeScreenState extends State<UnsubscribeScreen> {
     final approved = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
+        scrollable: true,
         title: Text('Retry unsubscribe from ${candidate.name}?'),
         content: Text(
           'SenderWho will retry the verified one-click request for ${candidate.email}. Existing messages stay in your inbox. Retry only if the previous request failed.',
@@ -260,6 +388,7 @@ class _UnsubscribeScreenState extends State<UnsubscribeScreen> {
     final approved = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
+        scrollable: true,
         title: Text('Trust ${candidate.name}?'),
         content: Text(
           '${candidate.email} will be protected as a trusted sender and removed from unsubscribe suggestions.',
@@ -283,6 +412,7 @@ class _UnsubscribeScreenState extends State<UnsubscribeScreen> {
     setState(() {
       _trustingSenders.remove(candidate.id);
       if (trusted) {
+        _selected.remove(candidate.id);
         _hiddenSenderIds.add(candidate.id);
         _jobs.remove(candidate.id);
         _candidateCache.remove(candidate.id);
@@ -304,7 +434,13 @@ class _UnsubscribeScreenState extends State<UnsubscribeScreen> {
   void _schedulePoll([Duration delay = _pollInterval]) {
     _pollTimer?.cancel();
     if (!mounted || !_hasActiveJobs) return;
-    _pollTimer = Timer(delay, () => unawaited(_pollJobs()));
+    final chunks = (_jobs.values.where((job) => job.isActive).length / 25)
+        .ceil()
+        .clamp(1, 1000);
+    final effectiveDelay = delay < _pollInterval * chunks
+        ? _pollInterval * chunks
+        : delay;
+    _pollTimer = Timer(effectiveDelay, () => unawaited(_pollJobs()));
   }
 
   Future<void> _pollJobs() async {
@@ -334,9 +470,9 @@ class _UnsubscribeScreenState extends State<UnsubscribeScreen> {
         _consecutivePollFailures += 1;
         final paused = _consecutivePollFailures >= _maxConsecutivePollFailures;
         _jobError = paused
-            ? 'Automatic progress updates paused after repeated connection failures. Your unsubscribe jobs continue safely in the background.'
+            ? 'Automatic progress updates paused. Your unsubscribe requests continue in the background.'
             : _repository.lastError ??
-                  'Job progress could not be refreshed. SenderWho will retry automatically.';
+                  'Request progress could not be refreshed. SenderWho will retry automatically.';
       } else {
         _consecutivePollFailures = 0;
         _jobError = null;
@@ -360,7 +496,7 @@ class _UnsubscribeScreenState extends State<UnsubscribeScreen> {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text(
-            '$completed provider${completed == 1 ? '' : 's'} accepted the request${failed > 0 ? ', $failed failed' : ''}.',
+            '${[if (completed > 0) '$completed unsubscribe request${completed == 1 ? '' : 's'} accepted', if (failed > 0) '$failed request${failed == 1 ? '' : 's'} could not be completed'].join('; ')}.',
           ),
         ),
       );
@@ -391,12 +527,34 @@ class _UnsubscribeScreenState extends State<UnsubscribeScreen> {
     }
   }
 
+  Future<void> _refresh() async {
+    final future = _loadCandidates();
+    setState(() {
+      _candidatesFuture = future;
+    });
+    _retryProgress();
+    try {
+      await future;
+    } on Object {
+      /* The page exposes a retry action. */
+    }
+  }
+
+  Future<void> _openSender(UnsubscribeCandidate candidate) async {
+    await Navigator.pushNamed(
+      context,
+      SenderDetailsScreen.routeName,
+      arguments: candidate.id,
+    );
+    if (mounted) await _refresh();
+  }
+
   @override
   Widget build(BuildContext context) {
     return FutureBuilder<List<UnsubscribeCandidate>>(
       future: _candidatesFuture,
       builder: (context, snapshot) {
-        final liveItems = (snapshot.data ?? const <UnsubscribeCandidate>[])
+        final liveItems = (snapshot.data ?? _lastCandidates)
             .where((item) => !_hiddenSenderIds.contains(item.id))
             .toList();
         final liveIds = liveItems.map((item) => item.id).toSet();
@@ -419,118 +577,272 @@ class _UnsubscribeScreenState extends State<UnsubscribeScreen> {
                       _jobs[item.id]?.status == 'CANCELED'),
             )
             .toList();
+        final search = _query.text.trim().toLowerCase();
+        final visible = items.where((item) {
+          final job = _jobs[item.id];
+          if (_filter == 'ACTIVE' &&
+              job?.isActive != true &&
+              !_busySenders.contains(item.id)) {
+            return false;
+          }
+          if (_filter == 'RETRY' &&
+              job?.status != 'FAILED' &&
+              job?.status != 'CANCELED') {
+            return false;
+          }
+          return search.isEmpty ||
+              '${item.name} ${item.email}'.toLowerCase().contains(search);
+        }).toList();
+        final availableIds = actionableItems
+            .where((item) => !_trustingSenders.contains(item.id))
+            .map((item) => item.id)
+            .toSet();
+        final selectedItems = actionableItems
+            .where(
+              (item) =>
+                  _selected.contains(item.id) && availableIds.contains(item.id),
+            )
+            .toList();
+        final shownItems = visible
+            .where((item) => availableIds.contains(item.id))
+            .toList();
+        final initialLoading =
+            snapshot.connectionState == ConnectionState.waiting &&
+            items.isEmpty &&
+            !snapshot.hasData;
         return AppPage(
+          maxContentWidth: 1000,
+          onRefresh: _refresh,
+          header: AppHeader(
+            title: 'Unsubscribe',
+            action: _selecting
+                ? TextButton(
+                    onPressed: () => setState(() {
+                      _selecting = false;
+                      _selected.clear();
+                    }),
+                    child: const Text('Cancel'),
+                  )
+                : Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      IconButton(
+                        tooltip: _showSearch
+                            ? 'Close subscription search'
+                            : 'Search subscriptions',
+                        onPressed: () {
+                          setState(() => _showSearch = !_showSearch);
+                          if (!_showSearch && _query.text.isNotEmpty) {
+                            _query.clear();
+                            _changeCandidateFilters();
+                          }
+                        },
+                        icon: Icon(
+                          _showSearch
+                              ? Icons.close_rounded
+                              : Icons.search_rounded,
+                        ),
+                      ),
+                      PopupMenuButton<String>(
+                        key: const ValueKey('unsubscribe-page-menu'),
+                        tooltip: 'Subscription actions',
+                        onSelected: (action) {
+                          if (action == 'refresh') _refresh();
+                          if (action == 'select') {
+                            setState(() => _selecting = true);
+                          }
+                          if (action == 'all') _startAll(shownItems);
+                        },
+                        itemBuilder: (_) => [
+                          PopupMenuItem(
+                            value: 'select',
+                            enabled: shownItems.isNotEmpty,
+                            child: const Text('Select subscriptions'),
+                          ),
+                          const PopupMenuItem(
+                            value: 'refresh',
+                            child: Text('Refresh subscriptions'),
+                          ),
+                          if (shownItems.isNotEmpty)
+                            PopupMenuItem(
+                              key: const ValueKey('unsubscribe-all-shown'),
+                              value: 'all',
+                              child: Text(
+                                'Unsubscribe all shown (${shownItems.length})',
+                              ),
+                            ),
+                        ],
+                      ),
+                    ],
+                  ),
+          ),
+          bottomNavigationBar: _selecting
+              ? _SubscriptionSelectionBar(
+                  count: selectedItems.length,
+                  onSubmit: selectedItems.isEmpty
+                      ? null
+                      : () => _startAll(selectedItems),
+                )
+              : null,
           child: Column(
-            crossAxisAlignment: CrossAxisAlignment.center,
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              AppHeader(
-                title: 'Unsubscribe',
-                subtitle: 'Stop future recurring email',
-                action: IconButton.filledTonal(
-                  tooltip: 'Refresh candidates',
-                  onPressed: () {
-                    setState(() {
-                      _candidatesFuture = _loadCandidates();
-                    });
-                    _retryProgress();
-                  },
-                  icon: const Icon(Icons.refresh_rounded, size: 20),
+              const SizedBox(height: 8),
+              Text(
+                'Stop emails you no longer want. Existing messages stay in your mailbox.',
+                style: Theme.of(context).textTheme.bodySmall,
+              ),
+              const SizedBox(height: 10),
+              if (_showSearch) ...[
+                SearchBox(
+                  hint: 'Search subscriptions',
+                  controller: _query,
+                  onChanged: (_) => _changeCandidateFilters(debounce: true),
+                  onSubmitted: (_) => _changeCandidateFilters(),
+                ),
+                const SizedBox(height: 8),
+              ],
+              SingleChildScrollView(
+                scrollDirection: Axis.horizontal,
+                child: Row(
+                  children: [
+                    for (final tab in {
+                      'ALL': 'All',
+                      'ACTIVE': 'In progress',
+                      'RETRY': 'Needs retry',
+                    }.entries) ...[
+                      MailFilterTab(
+                        label: tab.value,
+                        selected: _filter == tab.key,
+                        onTap: () {
+                          _filter = tab.key;
+                          _changeCandidateFilters();
+                        },
+                      ),
+                      const SizedBox(width: 8),
+                    ],
+                  ],
                 ),
               ),
-              SizedBox(height: context.gap(18)),
+              if (snapshot.hasError && items.isNotEmpty) ...[
+                AppAsyncError(
+                  title: 'Could not refresh subscriptions',
+                  message: appAsyncErrorMessage(snapshot.error),
+                  onRetry: _refresh,
+                ),
+                const SizedBox(height: 12),
+              ],
               if (_jobError case final error?) ...[
                 AppAsyncError(
-                  title: 'Could not refresh unsubscribe progress',
+                  title: 'Could not update request progress',
                   message: error,
                   onRetry: _retryProgress,
                 ),
-                SizedBox(height: context.gap(14)),
+                const SizedBox(height: 12),
               ],
-              _UnsubscribeHero(count: actionableItems.length),
-              SizedBox(height: context.gap(18)),
-              if (snapshot.connectionState == ConnectionState.waiting)
-                const _UnsubscribeSkeleton()
-              else if (snapshot.hasError)
-                AppAsyncError(
-                  message: appAsyncErrorMessage(snapshot.error),
-                  onRetry: () => setState(() {
-                    _candidatesFuture = _loadCandidates();
-                  }),
-                )
-              else if (items.isEmpty)
-                AppCard(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 24,
-                    vertical: 34,
-                  ),
-                  child: Column(
+              if (!initialLoading && !snapshot.hasError)
+                Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 8),
+                  child: Wrap(
+                    alignment: WrapAlignment.spaceBetween,
+                    crossAxisAlignment: WrapCrossAlignment.center,
+                    spacing: 12,
+                    runSpacing: 4,
                     children: [
-                      Container(
-                        width: 56,
-                        height: 56,
-                        decoration: BoxDecoration(
-                          color: AppColors.softFill(context, AppColors.success),
-                          borderRadius: BorderRadius.circular(18),
-                        ),
-                        child: const Icon(
-                          Icons.mark_email_read_outlined,
-                          color: AppColors.success,
-                        ),
-                      ),
-                      const SizedBox(height: 14),
                       Text(
-                        'You are all caught up',
-                        style: Theme.of(context).textTheme.titleMedium,
+                        _hasMore
+                            ? '${visible.length} of $_total subscriptions'
+                            : '${visible.length} ${visible.length == 1 ? 'subscription' : 'subscriptions'}',
+                        key: const ValueKey('unsubscribe-actionable-count'),
+                        style: Theme.of(context).textTheme.labelMedium,
                       ),
-                      const SizedBox(height: 5),
-                      Text(
-                        'No supported one-click unsubscribe senders were found.',
-                        textAlign: TextAlign.center,
-                        style: Theme.of(context).textTheme.bodyMedium,
-                      ),
+                      if (_selecting && shownItems.isNotEmpty)
+                        TextButton(
+                          key: const ValueKey('unsubscribe-select-visible'),
+                          onPressed: () => setState(
+                            () => _selected.addAll(
+                              shownItems.map((item) => item.id),
+                            ),
+                          ),
+                          child: const Text('Select all shown'),
+                        ),
                     ],
                   ),
+                ),
+              if (initialLoading)
+                const _UnsubscribeSkeleton()
+              else if (snapshot.hasError && items.isEmpty)
+                AppAsyncError(
+                  title: 'Subscriptions could not be loaded',
+                  message: appAsyncErrorMessage(snapshot.error),
+                  onRetry: _refresh,
+                )
+              else if (visible.isEmpty)
+                AppEmptyState(
+                  icon: items.isEmpty
+                      ? Icons.mark_email_read_outlined
+                      : Icons.search_off_rounded,
+                  title: items.isEmpty && search.isEmpty && _filter == 'ALL'
+                      ? 'No subscriptions to review'
+                      : 'No matching subscriptions',
+                  message: items.isEmpty && search.isEmpty && _filter == 'ALL'
+                      ? 'Senders with a supported unsubscribe option appear here after a mailbox scan.'
+                      : 'Try another search or view all subscriptions.',
+                  action: items.isEmpty && search.isEmpty && _filter == 'ALL'
+                      ? null
+                      : TextButton(
+                          onPressed: () {
+                            _query.clear();
+                            _filter = 'ALL';
+                            _changeCandidateFilters();
+                          },
+                          child: const Text('Clear filters'),
+                        ),
                 )
               else
-                Column(
-                  children: [
-                    for (var i = 0; i < items.length; i++) ...[
-                      _UnsubscribeRow(
-                        candidate: items[i],
-                        starting: _busySenders.contains(items[i].id),
-                        trusting: _trustingSenders.contains(items[i].id),
-                        job: _jobs[items[i].id],
-                        onUnsubscribe: () => _start(items[i]),
-                        onRetry: () => _retry(items[i]),
-                        onTrust: () => _trust(items[i]),
-                      ),
-                      if (i != items.length - 1) const SizedBox(height: 10),
-                    ],
-                  ],
+                for (var i = 0; i < visible.length; i++) ...[
+                  _UnsubscribeRow(
+                    candidate: visible[i],
+                    starting: _busySenders.contains(visible[i].id),
+                    trusting: _trustingSenders.contains(visible[i].id),
+                    job: _jobs[visible[i].id],
+                    selecting: _selecting,
+                    selected: _selected.contains(visible[i].id),
+                    canSelect: availableIds.contains(visible[i].id),
+                    onSelect: () => setState(() {
+                      _selecting = true;
+                      if (!_selected.add(visible[i].id)) {
+                        _selected.remove(visible[i].id);
+                      }
+                    }),
+                    onOpen: () => _openSender(visible[i]),
+                    onUnsubscribe: () => _start(visible[i]),
+                    onRetry: () => _retry(visible[i]),
+                    onTrust: () => _trust(visible[i]),
+                  ),
+                  if (i != visible.length - 1) const Divider(height: 1),
+                ],
+              if (_moreError case final error?)
+                AppAsyncError(
+                  title: 'Could not load more subscriptions',
+                  message: error,
+                  onRetry: _loadMore,
                 ),
-              if (actionableItems.isNotEmpty) ...[
-                SizedBox(height: context.gap(22)),
-                Row(
-                  children: [
-                    Icon(
-                      Icons.info_outline_rounded,
-                      size: 16,
-                      color: AppColors.mutedFor(context),
+              if (_hasMore && !initialLoading) ...[
+                const SizedBox(height: 12),
+                Center(
+                  child: OutlinedButton.icon(
+                    onPressed: _loadingMore ? null : _loadMore,
+                    icon: _loadingMore
+                        ? const SizedBox.square(
+                            dimension: 16,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          )
+                        : const Icon(Icons.expand_more_rounded),
+                    label: Text(
+                      _loadingMore ? 'Loading…' : 'Load more subscriptions',
                     ),
-                    const SizedBox(width: 7),
-                    Expanded(
-                      child: Text(
-                        'This asks providers to stop future recurring mail. It never archives, deletes, or moves existing email messages to Trash.',
-                        style: Theme.of(context).textTheme.bodySmall,
-                      ),
-                    ),
-                  ],
-                ),
-                SizedBox(height: context.gap(18)),
-                AppButton(
-                  label: 'Unsubscribe from All (${actionableItems.length})',
-                  backgroundColor: AppColors.danger,
-                  onPressed: () => _startAll(actionableItems),
+                  ),
                 ),
               ],
             ],
@@ -550,165 +862,218 @@ class _UnsubscribeRow extends StatelessWidget {
     required this.onUnsubscribe,
     required this.onRetry,
     required this.onTrust,
+    required this.selecting,
+    required this.selected,
+    required this.canSelect,
+    required this.onSelect,
+    required this.onOpen,
   });
 
   final UnsubscribeCandidate candidate;
   final bool starting;
   final bool trusting;
   final UnsubscribeJobInfo? job;
-  final VoidCallback onUnsubscribe;
-  final VoidCallback onRetry;
-  final VoidCallback onTrust;
+  final VoidCallback onUnsubscribe, onRetry, onTrust, onSelect, onOpen;
+  final bool selecting, selected, canSelect;
 
   @override
   Widget build(BuildContext context) {
-    final jobStatus = _jobStatusPresentation(job, starting: starting);
-    final jobStatusColor = jobStatus == null
-        ? null
-        : AppColors.foregroundFor(context, jobStatus.color);
-    return AppCard(
-      onTap: candidate.id.isEmpty
-          ? null
-          : () => Navigator.pushNamed(
-              context,
-              SenderDetailsScreen.routeName,
-              arguments: candidate.id,
+    final status = _jobStatusPresentation(job, starting: starting);
+    final busy = starting || trusting || job?.isActive == true;
+    final retry = job?.status == 'FAILED' || job?.status == 'CANCELED';
+    final statusColor = AppColors.foregroundFor(
+      context,
+      status?.color ?? AppColors.primary,
+    );
+    final stackActions =
+        MediaQuery.sizeOf(context).width < 340 ||
+        (MediaQuery.sizeOf(context).width < 380 &&
+            MediaQuery.textScalerOf(context).scale(14) > 16);
+    final actions = <Widget>[
+      if (!selecting && !busy && job?.status != 'COMPLETED') ...[
+        const SizedBox(width: 6),
+        Tooltip(
+          message: retry ? 'Retry unsubscribe' : 'Unsubscribe',
+          child: TextButton(
+            key: ValueKey(
+              retry
+                  ? 'unsubscribe-retry-${candidate.id}'
+                  : 'unsubscribe-start-${candidate.id}',
             ),
-      padding: const EdgeInsets.all(15),
-      child: Row(
-        children: [
-          IconBubble(
-            icon: Icons.mail_outline_rounded,
-            size: 46,
-            iconSize: 20,
-            color: candidate.color,
+            onPressed: retry ? onRetry : onUnsubscribe,
+            style: TextButton.styleFrom(
+              minimumSize: const Size(40, 40),
+              padding: const EdgeInsets.symmetric(horizontal: 8),
+            ),
+            child: Text(retry ? 'Retry' : 'Unsubscribe'),
           ),
-          const SizedBox(width: 14),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  candidate.name,
-                  style: Theme.of(context).textTheme.titleMedium,
-                ),
-                const SizedBox(height: 3),
-                Text(
-                  candidate.email,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: Theme.of(context).textTheme.bodyMedium,
-                ),
-                if (candidate.reason.isNotEmpty) ...[
-                  const SizedBox(height: 4),
-                  Text(
-                    candidate.reason,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: Theme.of(context).textTheme.labelSmall,
-                  ),
-                ],
-                if (jobStatus != null) ...[
-                  const SizedBox(height: 8),
-                  Row(
-                    children: [
-                      if (jobStatus.spinning)
-                        SizedBox.square(
-                          dimension: 13,
-                          child: CircularProgressIndicator(
-                            strokeWidth: 1.8,
-                            color: jobStatusColor,
-                          ),
-                        )
-                      else
-                        Icon(jobStatus.icon, size: 15, color: jobStatusColor),
-                      const SizedBox(width: 6),
-                      Flexible(
-                        child: Text(
-                          jobStatus.label,
-                          key: ValueKey('unsubscribe-status-${candidate.id}'),
+        ),
+        PopupMenuButton<String>(
+          key: ValueKey('unsubscribe-more-${candidate.id}'),
+          tooltip: 'More subscription actions',
+          padding: EdgeInsets.zero,
+          constraints: const BoxConstraints(minWidth: 180),
+          onSelected: (value) {
+            if (value == 'trust') onTrust();
+            if (value == 'view') onOpen();
+          },
+          itemBuilder: (_) => [
+            const PopupMenuItem(value: 'view', child: Text('View sender')),
+            PopupMenuItem(
+              key: ValueKey('trust-unsubscribe-${candidate.id}'),
+              value: 'trust',
+              child: const Text('Trust sender'),
+            ),
+          ],
+        ),
+      ],
+    ];
+    return Material(
+      color: selected
+          ? AppColors.softFill(context, AppColors.primary)
+          : Colors.transparent,
+      child: InkWell(
+        key: ValueKey('subscription-row-${candidate.id}'),
+        onTap: selecting ? (canSelect ? onSelect : null) : onOpen,
+        onLongPress: !selecting && canSelect ? onSelect : null,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(vertical: 12),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  if (selecting)
+                    SizedBox(
+                      width: 38,
+                      child: Checkbox(
+                        value: selected,
+                        onChanged: canSelect ? (_) => onSelect() : null,
+                      ),
+                    )
+                  else
+                    MailAvatar(name: candidate.name, size: 36),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          candidate.name,
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
-                          style: Theme.of(context).textTheme.labelMedium
+                          style: Theme.of(context).textTheme.bodyMedium
                               ?.copyWith(
-                                color: jobStatusColor,
-                                fontWeight: FontWeight.w800,
+                                color: AppColors.textFor(context),
+                                fontWeight: FontWeight.w600,
                               ),
                         ),
-                      ),
-                    ],
-                  ),
-                  if (jobStatus.reason case final reason?) ...[
-                    const SizedBox(height: 5),
-                    Text(
-                      reason,
-                      key: ValueKey('unsubscribe-failure-${candidate.id}'),
-                      maxLines: 2,
-                      overflow: TextOverflow.ellipsis,
-                      style: Theme.of(
-                        context,
-                      ).textTheme.bodySmall?.copyWith(color: jobStatusColor),
+                        const SizedBox(height: 3),
+                        Text(
+                          candidate.email,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: Theme.of(context).textTheme.bodySmall,
+                        ),
+                        if (status != null || trusting) ...[
+                          const SizedBox(height: 5),
+                          Row(
+                            children: [
+                              if (status?.spinning == true || trusting)
+                                const SizedBox.square(
+                                  dimension: 11,
+                                  child: CircularProgressIndicator(
+                                    strokeWidth: 1.5,
+                                  ),
+                                )
+                              else
+                                Icon(
+                                  status!.icon,
+                                  size: 13,
+                                  color: statusColor,
+                                ),
+                              const SizedBox(width: 5),
+                              Expanded(
+                                child: Text(
+                                  trusting
+                                      ? 'Saving sender preference…'
+                                      : status!.label,
+                                  key: ValueKey(
+                                    'unsubscribe-status-${candidate.id}',
+                                  ),
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: Theme.of(context).textTheme.labelSmall
+                                      ?.copyWith(color: statusColor),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ],
+                      ],
                     ),
-                  ],
+                  ),
+                  if (!stackActions) ...actions,
                 ],
-              ],
-            ),
-          ),
-          const SizedBox(width: 8),
-          if (starting || trusting || job?.isActive == true)
-            const SizedBox.square(
-              dimension: 22,
-              child: CircularProgressIndicator(strokeWidth: 2),
-            )
-          else if (job?.status == 'FAILED' || job?.status == 'CANCELED')
-            TextButton.icon(
-              key: ValueKey('unsubscribe-retry-${candidate.id}'),
-              onPressed: onRetry,
-              icon: const Icon(Icons.refresh_rounded, size: 17),
-              label: const Text('Retry'),
-              style: TextButton.styleFrom(foregroundColor: AppColors.warning),
-            )
-          else if (job?.status == 'COMPLETED')
-            Container(
-              width: 38,
-              height: 38,
-              decoration: BoxDecoration(
-                color: AppColors.softFill(context, AppColors.success),
-                shape: BoxShape.circle,
               ),
-              child: const Icon(
-                Icons.check_rounded,
-                size: 20,
-                color: AppColors.success,
-              ),
-            )
-          else
-            Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                IconButton.filledTonal(
-                  tooltip: 'Unsubscribe',
-                  onPressed: onUnsubscribe,
-                  style: IconButton.styleFrom(
-                    foregroundColor: AppColors.danger,
-                    backgroundColor: AppColors.softFill(
+              if (stackActions && actions.isNotEmpty)
+                Wrap(
+                  alignment: WrapAlignment.end,
+                  crossAxisAlignment: WrapCrossAlignment.center,
+                  children: actions,
+                ),
+              if (status?.reason case final reason?)
+                Padding(
+                  padding: EdgeInsets.only(left: selecting ? 48 : 46, top: 6),
+                  child: Text(
+                    reason,
+                    key: ValueKey('unsubscribe-failure-${candidate.id}'),
+                    style: Theme.of(
                       context,
-                      AppColors.danger,
-                    ),
+                    ).textTheme.bodySmall?.copyWith(color: statusColor),
                   ),
-                  icon: const Icon(Icons.unsubscribe_rounded, size: 19),
                 ),
-                TextButton(
-                  key: ValueKey('trust-unsubscribe-${candidate.id}'),
-                  onPressed: onTrust,
-                  child: const Text('Trust'),
-                ),
-              ],
-            ),
-        ],
+            ],
+          ),
+        ),
       ),
     );
   }
+}
+
+class _SubscriptionSelectionBar extends StatelessWidget {
+  const _SubscriptionSelectionBar({
+    required this.count,
+    required this.onSubmit,
+  });
+  final int count;
+  final VoidCallback? onSubmit;
+  @override
+  Widget build(BuildContext context) => Material(
+    color: AppColors.surface(context),
+    child: SafeArea(
+      top: false,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
+        child: Wrap(
+          alignment: WrapAlignment.spaceBetween,
+          crossAxisAlignment: WrapCrossAlignment.center,
+          spacing: 12,
+          runSpacing: 8,
+          children: [
+            Text(
+              '$count selected',
+              style: Theme.of(context).textTheme.bodyMedium,
+            ),
+            FilledButton(
+              onPressed: onSubmit,
+              child: Text('Unsubscribe ($count)'),
+            ),
+          ],
+        ),
+      ),
+    ),
+  );
 }
 
 class _JobStatusPresentation {
@@ -756,7 +1121,7 @@ _JobStatusPresentation? _jobStatusPresentation(
       );
     case 'COMPLETED':
       return const _JobStatusPresentation(
-        label: 'Request accepted',
+        label: 'Request sent',
         color: AppColors.success,
         icon: Icons.check_circle_outline_rounded,
       );
@@ -778,75 +1143,6 @@ _JobStatusPresentation? _jobStatusPresentation(
       );
     default:
       return null;
-  }
-}
-
-class _UnsubscribeHero extends StatelessWidget {
-  const _UnsubscribeHero({required this.count});
-
-  final int count;
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.all(21),
-      decoration: BoxDecoration(
-        color: AppColors.surface(context),
-        borderRadius: BorderRadius.circular(20),
-        border: Border.all(color: AppColors.borderFor(context)),
-      ),
-      child: Row(
-        children: [
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  '$count',
-                  key: const ValueKey('unsubscribe-actionable-count'),
-                  style: TextStyle(
-                    color: Theme.of(context).colorScheme.error,
-                    fontSize: 34,
-                    height: 1,
-                    fontWeight: FontWeight.w900,
-                  ),
-                ),
-                const SizedBox(height: 7),
-                Text(
-                  count == 1 ? 'sender available' : 'senders available',
-                  style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                    fontSize: 16,
-                    fontWeight: FontWeight.w700,
-                  ),
-                ),
-                const SizedBox(height: 7),
-                Text(
-                  'Send verified requests to stop future recurring email.',
-                  style: Theme.of(
-                    context,
-                  ).textTheme.bodySmall?.copyWith(fontSize: 12, height: 1.4),
-                ),
-              ],
-            ),
-          ),
-          const SizedBox(width: 12),
-          Container(
-            width: 64,
-            height: 64,
-            decoration: BoxDecoration(
-              color: AppColors.softFill(context, AppColors.danger),
-              shape: BoxShape.circle,
-            ),
-            child: const Icon(
-              Icons.unsubscribe_rounded,
-              color: AppColors.danger,
-              size: 29,
-            ),
-          ),
-        ],
-      ),
-    );
   }
 }
 

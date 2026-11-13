@@ -2,10 +2,12 @@ import 'package:flutter/material.dart';
 
 import '../screens/all_senders_screen.dart';
 import '../screens/bulk_clean_screen.dart';
-import '../screens/dashboard_screen.dart';
+import '../screens/unsubscribe_screen.dart';
 import '../screens/emails_screen.dart';
 import '../theme/app_colors.dart';
 import '../theme/app_motion.dart';
+import '../services/repository_scope.dart';
+import '../utils/app_navigation.dart';
 
 class AppBottomNavigation extends StatelessWidget {
   const AppBottomNavigation({super.key});
@@ -13,10 +15,10 @@ class AppBottomNavigation extends StatelessWidget {
   static const _destinations =
       <({String label, IconData icon, IconData selectedIcon, String route})>[
         (
-          label: 'Home',
-          icon: Icons.home_outlined,
-          selectedIcon: Icons.home_rounded,
-          route: '/dashboard',
+          label: 'Senders',
+          icon: Icons.people_outline_rounded,
+          selectedIcon: Icons.people_alt_rounded,
+          route: '/all-senders',
         ),
         (
           label: 'Inbox',
@@ -25,10 +27,10 @@ class AppBottomNavigation extends StatelessWidget {
           route: '/emails',
         ),
         (
-          label: 'Senders',
-          icon: Icons.people_outline_rounded,
-          selectedIcon: Icons.people_alt_rounded,
-          route: '/all-senders',
+          label: 'Unsubscribe',
+          icon: Icons.unsubscribe_outlined,
+          selectedIcon: Icons.unsubscribe_rounded,
+          route: '/unsubscribe',
         ),
         (
           label: 'Clean',
@@ -38,16 +40,20 @@ class AppBottomNavigation extends StatelessWidget {
         ),
       ];
 
-  Widget _pageFor(String route) => switch (route) {
-    '/dashboard' => const DashboardScreen(),
-    '/emails' => const EmailsScreen(),
-    '/all-senders' => const AllSendersScreen(),
-    '/bulk-clean' => const BulkCleanScreen(),
-    _ => const DashboardScreen(),
+  Widget _pageFor(BuildContext context, String route) => switch (route) {
+    '/unsubscribe' => UnsubscribeScreen(
+      repository: RepositoryScope.read(context),
+    ),
+    '/emails' => EmailsScreen(repository: RepositoryScope.read(context)),
+    '/all-senders' => AllSendersScreen(
+      repository: RepositoryScope.read(context),
+    ),
+    '/bulk-clean' => BulkCleanScreen(repository: RepositoryScope.read(context)),
+    _ => AllSendersScreen(repository: RepositoryScope.read(context)),
   };
 
   int _selectedIndex(String? route) {
-    if (route == null || route == '/' || route == '/dashboard') return 0;
+    if (route == '/unsubscribe') return 2;
     if (route == '/emails' || route == '/email-details') return 1;
     if ({
       '/all-senders',
@@ -56,13 +62,12 @@ class AppBottomNavigation extends StatelessWidget {
       '/top-senders',
       '/search-filter',
     }.contains(route)) {
-      return 2;
+      return 0;
     }
     if ({
       '/bulk-clean',
       '/delete-emails',
       '/review-promotions',
-      '/unsubscribe',
     }.contains(route)) {
       return 3;
     }
@@ -75,7 +80,23 @@ class AppBottomNavigation extends StatelessWidget {
     if (currentRoute == null || currentRoute == '/') {
       return const SizedBox.shrink();
     }
-    final selectedIndex = _selectedIndex(currentRoute);
+    final observer = Navigator.of(
+      context,
+    ).widget.observers.whereType<AppNavigationObserver>().firstOrNull;
+    final utilityPage = {
+      '/settings',
+      '/privacy-security',
+      '/profile',
+      '/connected-accounts',
+      '/dashboard',
+      '/activity',
+      '/security-alerts',
+      '/alert-details',
+      '/inbox-health',
+    }.contains(currentRoute);
+    final selectedIndex = _selectedIndex(
+      utilityPage ? observer?.lastMailboxRoute ?? currentRoute : currentRoute,
+    );
     final isDark = AppColors.isDark(context);
     return DecoratedBox(
       decoration: BoxDecoration(
@@ -87,13 +108,6 @@ class AppBottomNavigation extends StatelessWidget {
             ).withValues(alpha: isDark ? 0.55 : 0.45),
           ),
         ),
-        boxShadow: [
-          BoxShadow(
-            color: AppColors.shadowFor(context),
-            blurRadius: 18,
-            offset: const Offset(0, -5),
-          ),
-        ],
       ),
       child: SafeArea(
         top: false,
@@ -104,16 +118,10 @@ class AppBottomNavigation extends StatelessWidget {
             labelBehavior: NavigationDestinationLabelBehavior.alwaysShow,
             onDestinationSelected: (index) {
               final destination = _destinations[index];
-              if (currentRoute == destination.route) return;
-              Navigator.of(context).pushAndRemoveUntil(
-                PageRouteBuilder<void>(
-                  settings: RouteSettings(name: destination.route),
-                  transitionDuration: Duration.zero,
-                  reverseTransitionDuration: Duration.zero,
-                  pageBuilder: (context, animation, secondaryAnimation) =>
-                      _pageFor(destination.route),
-                ),
-                (_) => false,
+              AppNavigation.open(
+                context,
+                destination.route,
+                builder: (context) => _pageFor(context, destination.route),
               );
             },
             destinations: [

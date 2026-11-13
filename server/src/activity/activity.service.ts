@@ -1,3 +1,4 @@
+import { mailboxScope } from "../common/mailbox-scope";
 import { Injectable } from "@nestjs/common";
 import { PrismaService } from "../database/prisma.service";
 
@@ -13,19 +14,19 @@ export class ActivityService {
 
     const [received, cleaned, recentMessages] = await Promise.all([
       this.prisma.message.count({
-        where: { userId, receivedAt: { gte: startOfWeek } },
+        where: { ...mailboxScope(userId), receivedAt: { gte: startOfWeek } },
       }),
       this.prisma.cleanupJobItem.aggregate({
         where: {
           status: "COMPLETED",
           processedAt: { gte: startOfWeek },
-          cleanupJob: { userId },
+          cleanupJob: mailboxScope(userId),
         },
         _count: { _all: true },
         _sum: { sizeBytes: true },
       }),
       this.prisma.message.findMany({
-        where: { userId, receivedAt: { gte: startOfWeek } },
+        where: { ...mailboxScope(userId), receivedAt: { gte: startOfWeek } },
         select: { receivedAt: true },
       }),
     ]);

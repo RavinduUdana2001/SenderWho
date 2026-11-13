@@ -1,3 +1,5 @@
+import { ListUnsubscribeCandidatesDto } from "./dto/list-unsubscribe-candidates.dto";
+import { mailboxScope } from "../common/mailbox-scope";
 import {
   BadRequestException,
   Injectable,
@@ -19,13 +21,26 @@ export class UnsubscribeService {
     private readonly jobs: DatabaseJobQueueService,
   ) {}
 
-  async getCandidates(userId: string) {
+  async getCandidates(
+    userId: string,
+    query = new ListUnsubscribeCandidatesDto(),
+  ) {
+    const text = query.query?.trim();
     if (this.prisma.mockDataEnabled) {
+      const matching =
+        query.filter !== "ALL"
+          ? []
+          : mockSenders.filter(
+              (sender) =>
+                (sender.score < 80 || sender.category === "Promotions") &&
+                (!text ||
+                  `${sender.name} ${sender.email}`
+                    .toLowerCase()
+                    .includes(text.toLowerCase())),
+            );
       return {
-        items: mockSenders
-          .filter(
-            (sender) => sender.score < 80 || sender.category === "Promotions",
-          )
+        items: matching
+          .slice(query.skip, query.skip + query.limit)
           .map((sender) => ({
             id: sender.id,
             name: sender.name,
@@ -33,41 +48,90 @@ export class UnsubscribeService {
             reason: "Frequent marketing sender",
             colorKey: sender.colorKey,
           })),
+        total: matching.length,
+        page: query.page,
+        limit: query.limit,
+        hasMore: query.skip + query.limit < matching.length,
       };
     }
-
-    const senders = await this.prisma.sender.findMany({
-      where: {
-        userId,
-        isTrusted: false,
-        isBlocked: false,
-        messages: {
-          some: {
-            isTrashed: false,
-            listUnsubscribePost: true,
-            listUnsubscribeUrl: { not: null },
+    const eligibleMessage: Prisma.MessageWhereInput = {
+      isTrashed: false,
+      listUnsubscribePost: true,
+      listUnsubscribeUrl: { not: null },
+    };
+    const jobStates =
+      query.filter === "ACTIVE"
+        ? [JobStatus.QUEUED, JobStatus.RUNNING]
+        : query.filter === "RETRY"
+          ? [JobStatus.FAILED, JobStatus.CANCELED]
+          : null;
+    const where: Prisma.SenderWhereInput = {
+      ...mailboxScope(userId, query.emailAccountId),
+      isTrusted: false,
+      isBlocked: false,
+      AND: [
+        {
+          OR: [
+            { messages: { some: eligibleMessage } },
+            {
+              unsubscribeJobs: {
+                some: {
+                  status: {
+                    in: [
+                      JobStatus.QUEUED,
+                      JobStatus.RUNNING,
+                      JobStatus.FAILED,
+                      JobStatus.CANCELED,
+                    ],
+                  },
+                },
+              },
+            },
+          ],
+        },
+        { unsubscribeJobs: { none: { status: JobStatus.COMPLETED } } },
+        ...(jobStates
+          ? [{ unsubscribeJobs: { some: { status: { in: jobStates } } } }]
+          : []),
+      ],
+      ...(text
+        ? { OR: [{ name: { contains: text } }, { email: { contains: text } }] }
+        : {}),
+    };
+    const [senders, total] = await Promise.all([
+      this.prisma.sender.findMany({
+        where,
+        include: {
+          unsubscribeJobs: {
+            orderBy: { createdAt: "desc" },
+            take: 1,
+            select: {
+              id: true,
+              senderId: true,
+              status: true,
+              method: true,
+              createdAt: true,
+              completedAt: true,
+              metadata: true,
+            },
+          },
+          messages: {
+            where: eligibleMessage,
+            orderBy: { receivedAt: "desc" },
+            take: 1,
+            select: { receivedAt: true },
           },
         },
-        unsubscribeJobs: {
-          none: { status: JobStatus.COMPLETED },
-        },
-      },
-      include: {
-        messages: {
-          where: {
-            isTrashed: false,
-            listUnsubscribePost: true,
-            listUnsubscribeUrl: { not: null },
-          },
-          orderBy: { receivedAt: "desc" },
-          take: 1,
-          select: { receivedAt: true },
-        },
-      },
-      orderBy: [{ trustScore: "asc" }, { totalMessages: "desc" }],
-      take: 25,
-    });
-
+        orderBy: [
+          { trustScore: "asc" },
+          { totalMessages: "desc" },
+          { id: "asc" },
+        ],
+        skip: query.skip,
+        take: query.limit,
+      }),
+      this.prisma.sender.count({ where }),
+    ]);
     return {
       items: senders.map((sender) => ({
         id: sender.id,
@@ -77,6 +141,13 @@ export class UnsubscribeService {
         colorKey: sender.riskLevel === "HIGH" ? "danger" : "warning",
         lastMessageAt: sender.messages[0]?.receivedAt,
       })),
+      jobs: senders.flatMap((sender) =>
+        (sender.unsubscribeJobs ?? []).map((job) => this.jobResponse(job)),
+      ),
+      total,
+      page: query.page,
+      limit: query.limit,
+      hasMore: query.skip + senders.length < total,
     };
   }
 
@@ -290,6 +361,7 @@ export class UnsubscribeService {
     const jobs = await this.prisma.unsubscribeJob.findMany({
       where: {
         userId,
+        sender: mailboxScope(userId),
         // Restore failed rows as well so an app restart/refresh keeps the
         // provider failure and explicit retry action attached to its sender.
         status: {

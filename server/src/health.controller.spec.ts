@@ -22,6 +22,7 @@ describe("HealthController", () => {
     expect(controller.getLiveness()).toMatchObject({
       status: "ok",
       service: "senderwho-server",
+      apiContractVersion: "2026-11-04-mailbox-v3",
     });
     expect(prisma.$queryRaw).not.toHaveBeenCalled();
     expect(jobs.countRunnable).not.toHaveBeenCalled();

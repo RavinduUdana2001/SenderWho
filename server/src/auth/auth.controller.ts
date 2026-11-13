@@ -1,3 +1,4 @@
+import { randomBytes } from "node:crypto";
 import {
   Body,
   Controller,
@@ -9,8 +10,9 @@ import {
   Post,
   Query,
   Req,
+  Res,
 } from "@nestjs/common";
-import type { Request } from "express";
+import type { Request, Response } from "express";
 import { Throttle } from "@nestjs/throttler";
 import { CurrentUser } from "./current-user.decorator";
 import { ExchangeOAuthSessionDto } from "./dto/exchange-oauth-session.dto";
@@ -134,10 +136,13 @@ export class AuthController {
     @Query("code") code?: string,
     @Query("state") state?: string,
     @Query("error") error?: string,
+    @Res({ passthrough: true }) response?: Response,
   ) {
+    const renderResult = (success: boolean, title: string, message: string) =>
+      oauthResultPage(success, title, message, response?.locals.cspNonce);
     if (error) {
       await this.authService.failOAuthSession(state, error);
-      return oauthResultPage(
+      return renderResult(
         false,
         "Connection not completed",
         error === "access_denied"
@@ -150,7 +155,7 @@ export class AuthController {
         state,
         "Google authorization code is missing.",
       );
-      return oauthResultPage(
+      return renderResult(
         false,
         "Connection not completed",
         "Google did not return an authorization code. Return to SenderWho and try again.",
@@ -163,7 +168,7 @@ export class AuthController {
         code,
         state,
       );
-      return oauthResultPage(
+      return renderResult(
         true,
         result.reauthenticated ? "Identity verified" : "Gmail connected",
         result.reauthenticated
@@ -171,7 +176,7 @@ export class AuthController {
           : `${result.emailAddress} is now connected. Return to SenderWho to continue.`,
       );
     } catch {
-      return oauthResultPage(
+      return renderResult(
         false,
         "Could not connect Gmail",
         "SenderWho could not finish the secure Google connection. Return to the app for details and try again.",
@@ -187,10 +192,13 @@ export class AuthController {
     @Query("code") code?: string,
     @Query("state") state?: string,
     @Query("error") error?: string,
+    @Res({ passthrough: true }) response?: Response,
   ) {
+    const renderResult = (success: boolean, title: string, message: string) =>
+      oauthResultPage(success, title, message, response?.locals.cspNonce);
     if (error) {
       await this.authService.failOAuthSession(state, error);
-      return oauthResultPage(
+      return renderResult(
         false,
         "Connection not completed",
         error === "access_denied"
@@ -203,7 +211,7 @@ export class AuthController {
         state,
         "Microsoft authorization code is missing.",
       );
-      return oauthResultPage(
+      return renderResult(
         false,
         "Connection not completed",
         "Microsoft did not return an authorization code. Return to SenderWho and try again.",
@@ -215,7 +223,7 @@ export class AuthController {
         code,
         state,
       );
-      return oauthResultPage(
+      return renderResult(
         true,
         result.reauthenticated
           ? "Identity verified"
@@ -225,7 +233,7 @@ export class AuthController {
           : `${result.emailAddress} is now connected. Return to SenderWho to continue.`,
       );
     } catch {
-      return oauthResultPage(
+      return renderResult(
         false,
         "Could not connect Microsoft Outlook",
         "SenderWho could not finish the secure Microsoft connection. Return to the app for details and try again.",
@@ -241,10 +249,13 @@ export class AuthController {
     @Query("code") code?: string,
     @Query("state") state?: string,
     @Query("error") error?: string,
+    @Res({ passthrough: true }) response?: Response,
   ) {
+    const renderResult = (success: boolean, title: string, message: string) =>
+      oauthResultPage(success, title, message, response?.locals.cspNonce);
     if (error) {
       await this.authService.failOAuthSession(state, error);
-      return oauthResultPage(
+      return renderResult(
         false,
         "Connection not completed",
         error === "access_denied"
@@ -257,7 +268,7 @@ export class AuthController {
         state,
         "Yahoo authorization code is missing.",
       );
-      return oauthResultPage(
+      return renderResult(
         false,
         "Connection not completed",
         "Yahoo did not return an authorization code. Return to SenderWho and try again.",
@@ -269,7 +280,7 @@ export class AuthController {
         code,
         state,
       );
-      return oauthResultPage(
+      return renderResult(
         true,
         result.reauthenticated ? "Identity verified" : "Yahoo Mail connected",
         result.reauthenticated
@@ -277,7 +288,7 @@ export class AuthController {
           : `${result.emailAddress} is now connected. Return to SenderWho to continue.`,
       );
     } catch {
-      return oauthResultPage(
+      return renderResult(
         false,
         "Could not connect Yahoo Mail",
         "SenderWho could not finish the secure Yahoo connection. Return to the app for details and try again.",
@@ -340,6 +351,12 @@ export class AuthController {
     return this.authService.revokeAllSessions(userId);
   }
 
+  @Post("sessions/revoke-after-provider-password-change")
+  @Idempotent("auth.sessions.revoke-after-provider-password-change")
+  revokeSessionsAfterProviderPasswordChange(@CurrentUser("id") userId: string) {
+    return this.authService.revokeSessionsAfterProviderPasswordChange(userId);
+  }
+
   @Post("logout")
   @Public()
   @HttpCode(200)
@@ -380,7 +397,9 @@ export function oauthResultPage(
   success: boolean,
   title: string,
   message: string,
+  responseNonce?: string,
 ) {
+  const nonce = responseNonce ?? randomBytes(18).toString("base64");
   const safeTitle = escapeHtml(title);
   const safeMessage = escapeHtml(message);
   const color = success ? "#16b978" : "#f0445e";
@@ -394,10 +413,10 @@ export function oauthResultPage(
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'nonce-senderwho-oauth'; base-uri 'none'; form-action 'none'">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'nonce-${nonce}'; base-uri 'none'; form-action 'none'">
     <meta http-equiv="refresh" content="1;url=${appUrl}">
     <title>SenderWho</title>
-    <script nonce="senderwho-oauth">
+    <script nonce="${nonce}">
       (() => {
         const openApp = () => window.location.replace("${appUrl}");
         window.addEventListener("pageshow", () => window.setTimeout(openApp, 120));

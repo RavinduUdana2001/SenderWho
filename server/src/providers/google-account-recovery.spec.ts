@@ -48,4 +48,31 @@ describe("getGoogleAccountRecoveryAction", () => {
       ),
     ).toBe("RETRY");
   });
+
+  it("offers reconnect for legacy 403 failures and separates quota, policy and configuration", () => {
+    expect(
+      getGoogleAccountRecoveryAction(
+        "FAILED",
+        "Gmail batch item failed with status 403.",
+      ),
+    ).toBe("RECONNECT");
+    expect(
+      getGoogleAccountRecoveryAction(
+        "FAILED",
+        "Gmail is temporarily limiting mailbox scans.",
+      ),
+    ).toBe("RETRY");
+    expect(
+      getGoogleAccountRecoveryAction(
+        "FAILED",
+        "Your Google Workspace administrator does not allow SenderWho.",
+      ),
+    ).toBe("CONTACT_ADMIN");
+    expect(
+      getGoogleAccountRecoveryAction(
+        "FAILED",
+        "The SenderWho Gmail API is not enabled.",
+      ),
+    ).toBe("CONFIGURE_GOOGLE");
+  });
 });

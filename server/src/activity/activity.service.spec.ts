@@ -1,3 +1,4 @@
+import { mailboxScope } from "../common/mailbox-scope";
 import { ActivityService } from "./activity.service";
 
 describe("ActivityService", () => {
@@ -26,7 +27,7 @@ describe("ActivityService", () => {
     ]);
     expect(prisma.message.count).toHaveBeenCalledWith({
       where: {
-        userId: "user-1",
+        ...mailboxScope("user-1"),
         receivedAt: { gte: expect.any(Date) },
       },
     });
@@ -34,7 +35,7 @@ describe("ActivityService", () => {
       where: {
         status: "COMPLETED",
         processedAt: { gte: expect.any(Date) },
-        cleanupJob: { userId: "user-1" },
+        cleanupJob: mailboxScope("user-1"),
       },
       _count: { _all: true },
       _sum: { sizeBytes: true },

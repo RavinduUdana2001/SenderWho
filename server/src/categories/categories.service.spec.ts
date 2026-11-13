@@ -1,3 +1,4 @@
+import { mailboxScope } from "../common/mailbox-scope";
 import { SenderCategory } from "@prisma/client";
 import { CategoriesService } from "./categories.service";
 
@@ -19,7 +20,7 @@ describe("CategoriesService", () => {
 
     expect(prisma.message.groupBy).toHaveBeenCalledWith({
       by: ["category"],
-      where: { userId: "user-1", isTrashed: false },
+      where: { ...mailboxScope("user-1"), isTrashed: false },
       _count: { _all: true },
     });
     expect(result.items).toHaveLength(Object.values(SenderCategory).length);

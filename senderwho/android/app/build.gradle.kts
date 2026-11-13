@@ -23,10 +23,6 @@ android {
         targetCompatibility = JavaVersion.VERSION_17
     }
 
-    kotlinOptions {
-        jvmTarget = JavaVersion.VERSION_17.toString()
-    }
-
     defaultConfig {
         applicationId = "com.senderwho.app"
         // You can update the following values to match your application needs.
@@ -54,6 +50,12 @@ android {
             // With no key.properties this stays unsigned for CI verification.
             signingConfig = signingConfigs.findByName("release")
         }
+    }
+}
+
+kotlin {
+    compilerOptions {
+        jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17)
     }
 }
 

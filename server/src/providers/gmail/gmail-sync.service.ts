@@ -1,5 +1,6 @@
 import { Injectable, Logger, UnauthorizedException } from "@nestjs/common";
 import { domainToASCII } from "node:url";
+import { setTimeout as wait } from "node:timers/promises";
 import {
   CleanupCategory,
   IdentityRiskLevel,
@@ -14,6 +15,7 @@ import { ConfigService } from "@nestjs/config";
 import { PrismaService } from "../../database/prisma.service";
 import { GoogleTokenService } from "../google-token.service";
 import {
+  gmailApiError,
   GmailApiError,
   GmailClient,
   GmailHistoryList,
@@ -37,6 +39,7 @@ interface ParsedSender {
 
 type GmailRequest = <T>(
   action: (accessToken: string) => Promise<T>,
+  metadataCount?: number,
 ) => Promise<T>;
 
 // Increment whenever newly collected Gmail headers or derived message metadata
@@ -142,7 +145,12 @@ export class GmailSyncService {
     return this.persistMessage(emailAccountId, userId, message);
   }
 
-  async syncAccount(emailAccountId: string, onProgress?: SyncProgress) {
+  async syncAccount(
+    emailAccountId: string,
+    onProgress?: SyncProgress,
+    signal?: AbortSignal,
+  ) {
+    signal?.throwIfAborted();
     // Keep metadata batches deliberately below Gmail's hard limit of 50.
     // Each messages.get consumes quota independently even inside a batch, so
     // smaller bursts are substantially less likely to be rate limited.
@@ -192,20 +200,40 @@ export class GmailSyncService {
       const token = {
         value: await this.googleTokens.getAccessToken(emailAccountId),
       };
+      let nextMetadataAt = 0;
+      const reserveMetadata = async (count: number) => {
+        if (count <= 0) return;
+        const now = Date.now();
+        const start = Math.max(now, nextMetadataAt);
+        // At most 200 metadata reads/minute (4,000 quota units). Leave room
+        // for interactive reads and other Gmail clients under the 6,000 limit.
+        nextMetadataAt = start + count * 300;
+        await this.waitForQuota(start - now, signal);
+      };
       const gmailRequest = async <T>(
         action: (accessToken: string) => Promise<T>,
+        metadataCount = 0,
       ): Promise<T> => {
+        signal?.throwIfAborted();
+        await reserveMetadata(metadataCount);
         try {
-          return await action(token.value);
+          const result = await action(token.value);
+          signal?.throwIfAborted();
+          return result;
         } catch (error) {
           if (!(error instanceof GmailApiError) || error.status !== 401) {
             throw error;
           }
+          signal?.throwIfAborted();
           token.value = await this.googleTokens.getAccessToken(
             emailAccountId,
             true,
           );
-          return action(token.value);
+          signal?.throwIfAborted();
+          await reserveMetadata(metadataCount);
+          const result = await action(token.value);
+          signal?.throwIfAborted();
+          return result;
         }
       };
       const profile = await gmailRequest((accessToken) =>
@@ -270,10 +298,22 @@ export class GmailSyncService {
           gmailRequest,
           onProgress,
           backfillPageToken ?? undefined,
+          async (nextPageToken, processed) => {
+            signal?.throwIfAborted();
+            await this.prisma.emailAccount.update({
+              where: { id: emailAccountId },
+              data: {
+                backfillPageToken: nextPageToken,
+                backfillHistoryId: backfillHistoryId ?? profile.historyId,
+                backfillProcessed: backfillProcessed + processed,
+              },
+            });
+          },
         );
       }
       const { processed, discovered } = syncResult;
 
+      signal?.throwIfAborted();
       await this.recalculateAccount(emailAccountId);
       await this.refreshCleanupSuggestions(emailAccountId);
       const needsContinuation = Boolean(syncResult.nextPageToken);
@@ -314,6 +354,20 @@ export class GmailSyncService {
         backfillProcessed: nextBackfillProcessed,
       };
     } catch (error) {
+      if (signal?.aborted) throw error;
+      // A failed page can still contain successfully imported messages.
+      // Publish their counts before displaying the paused/failed state.
+      try {
+        await this.recalculateAccount(emailAccountId);
+      } catch {
+        this.logger.warn(
+          JSON.stringify({
+            event: "gmail.sync.partial_counts_failed",
+            targetId: emailAccountId,
+          }),
+        );
+      }
+      signal?.throwIfAborted();
       const message = this.safeErrorMessage(error);
       const recoveryAction = getGoogleAccountRecoveryAction(
         SyncStatus.FAILED,
@@ -321,7 +375,8 @@ export class GmailSyncService {
       );
       const disconnected =
         error instanceof UnauthorizedException ||
-        recoveryAction === "RECONNECT";
+        (recoveryAction === "RECONNECT" &&
+          !(error instanceof GmailApiError && error.status === 403));
       await this.prisma.emailAccount.update({
         where: { id: emailAccountId },
         data: {
@@ -352,7 +407,13 @@ export class GmailSyncService {
           errorType:
             error instanceof Error ? error.constructor.name : "UnknownError",
           recoveryAction,
-          reason: message,
+          ...(error instanceof GmailApiError
+            ? {
+                providerStatus: error.status,
+                providerReason: error.reason,
+                retryAfterMs: error.retryAfterMs,
+              }
+            : {}),
         }),
       );
       throw error;
@@ -368,6 +429,7 @@ export class GmailSyncService {
     gmailRequest: GmailRequest,
     onProgress?: SyncProgress,
     initialPageToken?: string,
+    checkpoint?: (nextPageToken: string, processed: number) => Promise<void>,
   ) {
     let pageToken = initialPageToken;
     let continuationToken: string | undefined;
@@ -383,47 +445,65 @@ export class GmailSyncService {
       );
       const messageRefs = page.messages ?? [];
       discovered += messageRefs.length;
-      const batch = await gmailRequest((accessToken) =>
-        this.gmail.getMessagesBatch(
-          accessToken,
-          messageRefs.map((ref) => ref.id),
-        ),
+      const batch = await gmailRequest(
+        (accessToken) =>
+          this.gmail.getMessagesBatch(
+            accessToken,
+            messageRefs.map((ref) => ref.id),
+          ),
+        messageRefs.length,
       );
-      await this.mapWithConcurrency(batch, concurrency, async (result) => {
-        if (result.status === 404) {
-          await this.prisma.message.deleteMany({
-            where: {
-              emailAccountId,
-              providerMessageId: result.id,
-            },
-          });
-        } else if (!result.message) {
-          throw new GmailApiError(
-            result.status,
-            `Gmail batch item failed with status ${result.status}.`,
-          );
-        } else {
-          const blocked = await this.persistMessage(
-            emailAccountId,
-            userId,
-            result.message,
-          );
-          if (blocked && !(result.message.labelIds ?? []).includes("TRASH")) {
-            await gmailRequest((accessToken) =>
-              this.gmail.trashMessage(accessToken, result.id),
-            );
-            await this.prisma.message.updateMany({
-              where: { emailAccountId, providerMessageId: result.id },
-              data: { isTrashed: true, isArchived: false },
+      const failure = batch.find(
+        (result) => !result.message && result.status !== 404,
+      );
+      // Save every successful item, even when another item exhausted its retry.
+      await this.mapWithConcurrency(
+        batch.filter((result) => result.message || result.status === 404),
+        concurrency,
+        async (result) => {
+          if (result.status === 404) {
+            await this.prisma.message.deleteMany({
+              where: {
+                emailAccountId,
+                providerMessageId: result.id,
+              },
             });
+          } else if (!result.message) {
+            throw gmailApiError(result.status, result.errorReason);
+          } else {
+            const blocked = await this.persistMessage(
+              emailAccountId,
+              userId,
+              result.message,
+            );
+            if (blocked && !(result.message.labelIds ?? []).includes("TRASH")) {
+              await gmailRequest((accessToken) =>
+                this.gmail.trashMessage(accessToken, result.id),
+              );
+              await this.prisma.message.updateMany({
+                where: { emailAccountId, providerMessageId: result.id },
+                data: { isTrashed: true, isArchived: false },
+              });
+            }
+            processed += 1;
           }
-          processed += 1;
-        }
-        if (processed % 25 === 0 || processed === discovered) {
-          await onProgress?.(processed, discovered);
-        }
-      });
+          if (processed % 25 === 0 || processed === discovered) {
+            await onProgress?.(processed, discovered);
+          }
+        },
+      );
+      if (failure)
+        throw gmailApiError(
+          failure.status,
+          failure.errorReason,
+          failure.retryAfterMs,
+        );
+      await this.recalculateAccount(
+        emailAccountId,
+        messageRefs.map((ref) => ref.id),
+      );
       continuationToken = page.nextPageToken;
+      if (continuationToken) await checkpoint?.(continuationToken, processed);
       pageToken = discovered < maxMessages ? continuationToken : undefined;
     } while (pageToken);
     return {
@@ -508,8 +588,9 @@ export class GmailSyncService {
   ) {
     let message: GmailMessage;
     try {
-      message = await gmailRequest((accessToken) =>
-        this.gmail.getMessage(accessToken, providerMessageId),
+      message = await gmailRequest(
+        (accessToken) => this.gmail.getMessage(accessToken, providerMessageId),
+        1,
       );
     } catch (error) {
       if (error instanceof GmailApiError && error.status === 404) {
@@ -533,9 +614,21 @@ export class GmailSyncService {
     return true;
   }
 
-  async recalculateAccount(emailAccountId: string) {
+  async recalculateAccount(
+    emailAccountId: string,
+    providerMessageIds?: string[],
+  ) {
     const senders = await this.prisma.sender.findMany({
-      where: { emailAccountId },
+      where: {
+        emailAccountId,
+        ...(providerMessageIds
+          ? {
+              messages: {
+                some: { providerMessageId: { in: providerMessageIds } },
+              },
+            }
+          : {}),
+      },
       select: { id: true },
     });
 
@@ -925,17 +1018,30 @@ export class GmailSyncService {
     action: (value: T) => Promise<void>,
   ) {
     let index = 0;
+    let failed = false;
+    let failure: unknown;
     const workers = Array.from(
       { length: Math.min(concurrency, values.length) },
       async () => {
-        while (index < values.length) {
+        while (!failed && index < values.length) {
           const current = values[index];
           index += 1;
-          await action(current);
+          try {
+            await action(current);
+          } catch (error) {
+            if (!failed) failure = error;
+            failed = true;
+          }
         }
       },
     );
     await Promise.all(workers);
+    if (failed) throw failure;
+  }
+
+  private async waitForQuota(delay: number, signal?: AbortSignal) {
+    if (delay > 0) await wait(delay, undefined, { signal });
+    signal?.throwIfAborted();
   }
 
   private async safeAudit(

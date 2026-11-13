@@ -8,6 +8,7 @@ import '../screens/emails_screen.dart';
 import '../screens/privacy_security_screen.dart';
 import '../screens/all_senders_screen.dart';
 import '../services/senderwho_repository.dart';
+import '../services/repository_scope.dart';
 import '../theme/app_colors.dart';
 import '../theme/theme_mode_controller.dart';
 import '../utils/responsive.dart';
@@ -16,8 +17,8 @@ import '../widgets/app_card.dart';
 import '../widgets/app_async_state.dart';
 import '../widgets/app_header.dart';
 import '../widgets/app_page.dart';
-import '../widgets/icon_bubble.dart';
 import '../widgets/section_title.dart';
+import '../widgets/delete_senderwho_account_dialog.dart';
 
 typedef SettingsPublicPageOpener =
     Future<void> Function(
@@ -43,7 +44,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   bool _savingPreferences = false;
 
   SenderWhoRepository get _repository =>
-      widget.repository ?? senderWhoRepository;
+      widget.repository ?? RepositoryScope.read(context);
 
   @override
   void initState() {
@@ -93,11 +94,29 @@ class _SettingsScreenState extends State<SettingsScreen> {
     AppSettings? updated;
     Object? failure;
     try {
-      updated = await _repository.updatePreferences(
-        notificationsEnabled: notificationsEnabled,
-        inboxScanFrequency: inboxScanFrequency,
-        theme: theme,
-      );
+      if (theme != null) {
+        final controller = ThemeModeController.of(context);
+        await controller.changeThemeMode(
+          switch (theme) {
+            'Light' => ThemeMode.light,
+            'Dark' => ThemeMode.dark,
+            _ => ThemeMode.system,
+          },
+          save: () async {
+            try {
+              updated = await _repository.updatePreferences(theme: theme);
+            } on Object catch (error) {
+              failure = error;
+            }
+            return updated != null;
+          },
+        );
+      } else {
+        updated = await _repository.updatePreferences(
+          notificationsEnabled: notificationsEnabled,
+          inboxScanFrequency: inboxScanFrequency,
+        );
+      }
     } on Object catch (error) {
       failure = error;
     }
@@ -108,20 +127,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
         SnackBar(
           content: Text(
             failure is SenderWhoRequestException
-                ? failure.message
+                ? (failure as SenderWhoRequestException).message
                 : _repository.lastError ??
                       'Could not save this preference. Please try again.',
           ),
         ),
       );
       return;
-    }
-    if (theme != null) {
-      ThemeModeController.of(context).setThemeMode(switch (theme) {
-        'Light' => ThemeMode.light,
-        'Dark' => ThemeMode.dark,
-        _ => ThemeMode.system,
-      });
     }
     setState(() {
       _settingsFuture = Future.value(updated);
@@ -190,12 +202,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
       builder: (context, snapshot) {
         if (!snapshot.hasData) {
           return AppPage(
+            header: const AppHeader(title: 'Settings'),
             child: Column(
               children: [
-                const AppHeader(
-                  title: 'Settings',
-                  subtitle: 'Personalize your SenderWho experience',
-                ),
                 SizedBox(height: context.gap(22)),
                 if (snapshot.hasError)
                   AppAsyncError(
@@ -209,15 +218,20 @@ class _SettingsScreenState extends State<SettingsScreen> {
           );
         }
         final settings = snapshot.requireData;
+        final themeMode = ThemeModeController.maybeOf(context)?.mode;
+        final themeLabel = themeMode == null
+            ? settings.theme
+            : switch (themeMode) {
+                ThemeMode.light => 'Light',
+                ThemeMode.dark => 'Dark',
+                ThemeMode.system => 'System',
+              };
 
         return AppPage(
+          header: const AppHeader(title: 'Settings'),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              const AppHeader(
-                title: 'Settings',
-                subtitle: 'Personalize your SenderWho experience',
-              ),
               SizedBox(height: context.gap(22)),
               if (snapshot.hasError) ...[
                 AppAsyncError(
@@ -239,8 +253,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     SettingsTile(
                       key: const ValueKey('settings-connected-accounts'),
                       icon: Icons.alternate_email_rounded,
-                      title: 'Connected Accounts',
-                      subtitle: 'View every connected mailbox',
+                      title: 'Manage accounts',
+                      subtitle: 'Add, switch, or disconnect mailboxes',
                       value:
                           '${settings.connectedAccountsCount} ${settings.connectedAccountsCount == 1 ? 'Account' : 'Accounts'}',
                       onTap: () =>
@@ -274,16 +288,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     ),
                     const Divider(height: 1, indent: 20, endIndent: 20),
                     SettingsTile(
-                      key: const ValueKey('settings-manage-accounts'),
-                      icon: Icons.manage_accounts_outlined,
-                      title: 'Manage Accounts',
-                      subtitle:
-                          'Add Gmail, Outlook, or Yahoo; switch, scan, or disconnect',
-                      onTap: () =>
-                          _openRoute(ConnectedAccountsScreen.routeName),
-                    ),
-                    const Divider(height: 1, indent: 20, endIndent: 20),
-                    SettingsTile(
                       key: const ValueKey('settings-privacy-security'),
                       icon: Icons.verified_user_outlined,
                       title: 'Privacy & Security',
@@ -300,29 +304,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 child: Column(
                   children: [
                     SettingsTile(
-                      key: const ValueKey('settings-security-notifications'),
-                      icon: Icons.notifications_active_outlined,
-                      title: 'Security notifications',
-                      subtitle: 'Account, sync, and suspicious-activity alerts',
-                      trailingSwitch: true,
-                      switchValue: settings.notificationsEnabled,
-                      onSwitchChanged: _savingPreferences
-                          ? null
-                          : (enabled) => _updatePreferences(
-                              notificationsEnabled: enabled,
-                            ),
-                      onTap: _savingPreferences
-                          ? null
-                          : () => _updatePreferences(
-                              notificationsEnabled:
-                                  !settings.notificationsEnabled,
-                            ),
-                    ),
-                    const Divider(height: 1, indent: 20, endIndent: 20),
-                    SettingsTile(
                       key: const ValueKey('settings-email-categories'),
                       icon: Icons.category_outlined,
-                      title: 'E-mail Categories',
+                      title: 'Email Categories',
                       onTap: () => _openRoute(CategoriesScreen.routeName),
                     ),
                     const Divider(height: 1, indent: 20, endIndent: 20),
@@ -349,19 +333,19 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     const Divider(height: 1, indent: 20, endIndent: 20),
                     SettingsTile(
                       key: const ValueKey('settings-theme'),
-                      icon: switch (settings.theme) {
+                      icon: switch (themeLabel) {
                         'Dark' => Icons.dark_mode_outlined,
                         'Light' => Icons.light_mode_outlined,
                         _ => Icons.devices_rounded,
                       },
                       title: 'Theme',
-                      value: settings.theme,
+                      value: themeLabel,
                       onTap: _savingPreferences
                           ? null
                           : () => _choosePreference(
                               title: 'Theme',
                               values: const ['System', 'Light', 'Dark'],
-                              currentValue: settings.theme,
+                              currentValue: themeLabel,
                               onSelected: (value) =>
                                   _updatePreferences(theme: value),
                             ),
@@ -370,7 +354,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 ),
               ),
               SizedBox(height: context.gap(25)),
-              const SectionTitle(title: 'E-mail Management'),
+              const SectionTitle(title: 'Email Management'),
               const SizedBox(height: 14),
               AppCard(
                 padding: const EdgeInsets.symmetric(vertical: 8),
@@ -379,7 +363,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     SettingsTile(
                       key: const ValueKey('settings-archived-emails'),
                       icon: Icons.archive_outlined,
-                      title: 'Archived E-mails',
+                      title: 'Archived Emails',
                       value: '${settings.archivedEmails}',
                       onTap: () => _openRoute(
                         EmailsScreen.routeName,
@@ -457,18 +441,27 @@ class _SettingsScreenState extends State<SettingsScreen> {
                         pageName: 'SenderWho Support',
                       ),
                     ),
-                    const Divider(height: 1, indent: 20, endIndent: 20),
-                    SettingsTile(
-                      key: const ValueKey('settings-account-deletion-info'),
-                      icon: Icons.delete_forever_outlined,
-                      title: 'Account deletion information',
-                      onTap: () => _openPublicPage(
-                        url: AppConfig.accountDeletionUrl,
-                        pageName: 'account deletion information',
-                      ),
-                    ),
                   ],
                 ),
+              ),
+              SizedBox(height: context.gap(25)),
+              const SectionTitle(title: 'SenderWho account'),
+              const SizedBox(height: 10),
+              SettingsTile(
+                key: const ValueKey('settings-delete-senderwho-account'),
+                icon: Icons.person_remove_outlined,
+                title: 'Delete SenderWho account',
+                subtitle: 'Remove SenderWho data and disconnect all mailboxes',
+                destructive: true,
+                onTap: AppConfig.uiPreviewMode
+                    ? null
+                    : () => showDialog<void>(
+                        context: context,
+                        barrierDismissible: false,
+                        builder: (_) => DeleteSenderWhoAccountDialog(
+                          repository: _repository,
+                        ),
+                      ),
               ),
             ],
           ),
@@ -504,6 +497,9 @@ class SettingsTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final stackValue =
+        MediaQuery.sizeOf(context).width < 400 &&
+        MediaQuery.textScalerOf(context).scale(14) > 18;
     final color = destructive
         ? Theme.of(context).colorScheme.error
         : Theme.of(context).colorScheme.primary;
@@ -513,7 +509,14 @@ class SettingsTile extends StatelessWidget {
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 14),
         child: Row(
           children: [
-            IconBubble(icon: icon, size: 40, iconSize: 19, color: color),
+            SizedBox(
+              width: 28,
+              child: Icon(
+                icon,
+                size: 24,
+                color: destructive ? color : AppColors.textFor(context),
+              ),
+            ),
             const SizedBox(width: 12),
             Expanded(
               child: Column(
@@ -527,12 +530,14 @@ class SettingsTile extends StatelessWidget {
                           : null,
                     ),
                   ),
+                  if (stackValue && value != null) ...[
+                    const SizedBox(height: 5),
+                    Text(value!, style: Theme.of(context).textTheme.bodyMedium),
+                  ],
                   if (subtitle != null) ...[
                     const SizedBox(height: 5),
                     Text(
                       subtitle!,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
                       style: Theme.of(context).textTheme.bodyMedium,
                     ),
                   ],
@@ -542,7 +547,7 @@ class SettingsTile extends StatelessWidget {
             if (trailingSwitch)
               Switch.adaptive(value: switchValue, onChanged: onSwitchChanged)
             else ...[
-              if (value != null)
+              if (value != null && !stackValue)
                 Text(value!, style: Theme.of(context).textTheme.bodyMedium),
               if (onTap != null) ...[
                 const SizedBox(width: 6),

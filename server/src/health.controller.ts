@@ -1,13 +1,15 @@
 import { Controller, Get, ServiceUnavailableException } from "@nestjs/common";
+import { BackgroundHealthService } from "./common/background-health.service";
 import { Public } from "./auth/public.decorator";
 import { PrismaService } from "./database/prisma.service";
 import { DatabaseJobQueueService } from "./jobs/database-job-queue.service";
 
 export const READINESS_TIMEOUT_MS = 1_000;
+export const API_CONTRACT_VERSION = "2026-11-04-mailbox-v3";
 
 type ComponentStatus = {
   status: "up" | "down" | "skipped";
-  reason?: "timeout" | "unavailable";
+  reason?: "timeout" | "unavailable" | "stale";
 };
 
 class ReadinessTimeoutError extends Error {}
@@ -18,6 +20,7 @@ export class HealthController {
   constructor(
     private readonly prisma: PrismaService,
     private readonly jobs: DatabaseJobQueueService,
+    private readonly background: BackgroundHealthService = new BackgroundHealthService(),
   ) {}
 
   @Get()
@@ -47,7 +50,7 @@ export class HealthController {
         await this.jobs.countRunnable();
       }),
     ]);
-    const components = { mysql, databaseQueue };
+    const components = { mysql, databaseQueue, ...this.background.snapshot() };
     const ready = Object.values(components).every(
       (component) => component.status === "up",
     );
@@ -63,6 +66,7 @@ export class HealthController {
     return {
       status: "ok",
       service: "senderwho-server",
+      apiContractVersion: API_CONTRACT_VERSION,
       timestamp: new Date().toISOString(),
     };
   }
@@ -74,6 +78,7 @@ export class HealthController {
     return {
       status,
       service: "senderwho-server",
+      apiContractVersion: API_CONTRACT_VERSION,
       timestamp: new Date().toISOString(),
       components,
     };

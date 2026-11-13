@@ -15,6 +15,7 @@ export class ScanInboxProcessor {
   ) {}
 
   async process(job: ProcessorJob<{ emailAccountId: string }>) {
+    job.signal?.throwIfAborted();
     const account = await this.prisma.emailAccount.findUniqueOrThrow({
       where: { id: job.data.emailAccountId },
       select: { provider: true },
@@ -34,7 +35,11 @@ export class ScanInboxProcessor {
     }
     const result = await sync(
       job.data.emailAccountId,
-      (processed, discovered) => job.updateProgress({ processed, discovered }),
+      (processed, discovered) => {
+        job.signal?.throwIfAborted();
+        return job.updateProgress({ processed, discovered });
+      },
+      ...(job.signal ? [job.signal] : []),
     );
     return { emailAccountId: job.data.emailAccountId, ...result };
   }

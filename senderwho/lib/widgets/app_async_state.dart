@@ -3,7 +3,6 @@ import 'package:flutter/material.dart';
 import '../theme/app_semantic_colors.dart';
 import '../utils/user_friendly_error.dart';
 import 'app_card.dart';
-import 'icon_bubble.dart';
 
 class AppAsyncLoading extends StatelessWidget {
   const AppAsyncLoading({
@@ -60,39 +59,86 @@ class AppAsyncError extends StatelessWidget {
       padding: const EdgeInsets.all(20),
       color: semantic.warningContainer,
       borderColor: semantic.warning.withValues(alpha: 0.42),
-      child: Column(
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          IconBubble(
-            icon: Icons.cloud_off_rounded,
-            color: semantic.warning,
-            backgroundColor: semantic.onWarning,
+          Icon(
+            Icons.cloud_off_outlined,
+            color: semantic.onWarningContainer,
+            size: 24,
           ),
-          const SizedBox(height: 12),
-          Text(
-            title,
-            textAlign: TextAlign.center,
-            style: Theme.of(context).textTheme.titleMedium?.copyWith(
-              color: semantic.onWarningContainer,
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  title,
+                  style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                    color: semantic.onWarningContainer,
+                  ),
+                ),
+                const SizedBox(height: 5),
+                Text(
+                  userFriendlyErrorMessage(message),
+                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                    color: semantic.onWarningContainer,
+                  ),
+                ),
+                TextButton.icon(
+                  onPressed: onRetry,
+                  icon: const Icon(Icons.refresh_rounded, size: 18),
+                  label: const Text('Try again'),
+                ),
+              ],
             ),
-          ),
-          const SizedBox(height: 6),
-          Text(
-            message,
-            textAlign: TextAlign.center,
-            style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-              color: semantic.onWarningContainer,
-            ),
-          ),
-          const SizedBox(height: 14),
-          OutlinedButton.icon(
-            onPressed: onRetry,
-            icon: const Icon(Icons.refresh_rounded, size: 18),
-            label: const Text('Try again'),
           ),
         ],
       ),
     );
   }
+}
+
+/// A shared, explanatory empty state across mailbox and utility screens.
+class AppEmptyState extends StatelessWidget {
+  const AppEmptyState({
+    super.key,
+    required this.icon,
+    required this.title,
+    required this.message,
+    this.action,
+  });
+  final IconData icon;
+  final String title, message;
+  final Widget? action;
+  @override
+  Widget build(BuildContext context) => SizedBox(
+    width: double.infinity,
+    child: Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 36),
+      child: Column(
+        children: [
+          Icon(icon, size: 36, color: Theme.of(context).colorScheme.primary),
+          const SizedBox(height: 14),
+          Text(
+            title,
+            textAlign: TextAlign.center,
+            style: Theme.of(context).textTheme.titleMedium,
+          ),
+          const SizedBox(height: 6),
+          ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 320),
+            child: Text(
+              message,
+              textAlign: TextAlign.center,
+              style: Theme.of(context).textTheme.bodySmall,
+            ),
+          ),
+          if (action != null) ...[const SizedBox(height: 12), action!],
+        ],
+      ),
+    ),
+  );
 }
 
 String appAsyncErrorMessage(Object? error) {

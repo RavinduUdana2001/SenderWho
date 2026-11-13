@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import '../models/app_models.dart';
 import '../screens/emails_screen.dart';
 import '../services/senderwho_repository.dart';
+import '../services/repository_scope.dart';
 import '../theme/app_colors.dart';
 import '../utils/responsive.dart';
 import '../widgets/app_button.dart';
@@ -35,7 +36,7 @@ class _BulkCleanScreenState extends State<BulkCleanScreen> {
   Timer? _pollTimer;
 
   SenderWhoRepository get _repository =>
-      widget.repository ?? senderWhoRepository;
+      widget.repository ?? RepositoryScope.read(context);
 
   @override
   void initState() {
@@ -109,7 +110,7 @@ class _BulkCleanScreenState extends State<BulkCleanScreen> {
                 ? 'Cleanup stopped after $processed messages. $unchanged messages were left unchanged${failed > 0 ? ' and $failed could not be processed' : ''}.'
                 : failed == 0
                 ? '$processed messages cleaned from your inbox.'
-                : '$processed cleaned and $failed failed. You can retry the remaining suggestions.',
+                : '$processed messages cleaned; $failed could not be cleaned. Review the remaining suggestions to try again.',
           ),
         ),
       );
@@ -127,13 +128,13 @@ class _BulkCleanScreenState extends State<BulkCleanScreen> {
         final suggestions = snapshot.data ?? const <CleanupSuggestion>[];
         if (snapshot.hasError) {
           return AppPage(
+            header: const AppHeader(
+              title: 'Bulk Clean',
+              subtitle: 'Review suggestions before changing your inbox',
+            ),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                const AppHeader(
-                  title: 'Bulk Clean',
-                  subtitle: 'Review suggestions before changing your inbox',
-                ),
                 SizedBox(height: context.gap(18)),
                 AppAsyncError(
                   message: appAsyncErrorMessage(snapshot.error),
@@ -164,53 +165,36 @@ class _BulkCleanScreenState extends State<BulkCleanScreen> {
             cleanupRunning || _queueing || _preparingPreview;
 
         return AppPage(
+          header: const AppHeader(
+            title: 'Bulk Clean',
+            subtitle: 'Review suggestions before changing your inbox',
+          ),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.center,
             children: [
-              const AppHeader(
-                title: 'Bulk Clean',
-                subtitle: 'Review suggestions before changing your inbox',
-              ),
               SizedBox(height: context.gap(18)),
               _CleanupHero(
                 suggestionCount: suggestions.length,
                 loading: snapshot.connectionState == ConnectionState.waiting,
               ),
               SizedBox(height: context.gap(18)),
-              LayoutBuilder(
-                builder: (context, constraints) {
-                  final gap = constraints.maxWidth < 340 ? 12.0 : 24.0;
-                  return Row(
-                    children: [
-                      Expanded(
-                        child: _CleanStat(
-                          icon: Icons.sd_storage_outlined,
-                          color: AppColors.indigo,
-                          value: _formatBytes(selectedBytes),
-                          label: 'Selected matching space',
-                        ),
-                      ),
-                      SizedBox(width: gap),
-                      Expanded(
-                        child: _CleanStat(
-                          icon: Icons.mark_email_unread_outlined,
-                          color: AppColors.primary,
-                          value: _formatNumber(selectedMatches),
-                          label: 'Selected matches before de-duplication',
-                        ),
-                      ),
-                    ],
-                  );
-                },
-              ),
-              SizedBox(height: context.gap(24)),
-              Row(
+              if (selectedSuggestions.isNotEmpty)
+                Align(
+                  alignment: Alignment.centerLeft,
+                  child: Text(
+                    '${_formatNumber(selectedMatches)} matching emails · ${_formatBytes(selectedBytes)} estimated',
+                    style: Theme.of(context).textTheme.bodySmall,
+                  ),
+                ),
+              const SizedBox(height: 8),
+              Wrap(
+                alignment: WrapAlignment.spaceBetween,
+                crossAxisAlignment: WrapCrossAlignment.center,
+                spacing: 12,
                 children: [
-                  Expanded(
-                    child: Text(
-                      'Choose what to clean',
-                      style: Theme.of(context).textTheme.titleMedium,
-                    ),
+                  Text(
+                    'Choose what to clean',
+                    style: Theme.of(context).textTheme.titleMedium,
                   ),
                   if (suggestions.isNotEmpty)
                     TextButton(
@@ -228,14 +212,6 @@ class _BulkCleanScreenState extends State<BulkCleanScreen> {
                       child: Text(allSelected ? 'Clear all' : 'Select all'),
                     ),
                 ],
-              ),
-              const SizedBox(height: 6),
-              Align(
-                alignment: Alignment.centerLeft,
-                child: Text(
-                  'Nothing moves until you review the groups and confirm the exact unique total.',
-                  style: Theme.of(context).textTheme.bodyMedium,
-                ),
               ),
               const SizedBox(height: 16),
               if (suggestions.isEmpty &&
@@ -409,6 +385,7 @@ class _BulkCleanScreenState extends State<BulkCleanScreen> {
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (dialogContext) => AlertDialog(
+        scrollable: true,
         title: const Text('Clean selected messages?'),
         content: _CleanupConfirmationContent(
           suggestions: suggestions,
@@ -422,7 +399,10 @@ class _BulkCleanScreenState extends State<BulkCleanScreen> {
           ),
           FilledButton.icon(
             onPressed: () => Navigator.pop(dialogContext, true),
-            style: FilledButton.styleFrom(backgroundColor: AppColors.danger),
+            style: FilledButton.styleFrom(
+              backgroundColor: Theme.of(context).colorScheme.error,
+              foregroundColor: Theme.of(context).colorScheme.onError,
+            ),
             icon: const Icon(Icons.cleaning_services_outlined),
             label: const Text('Clean now'),
           ),
@@ -480,6 +460,7 @@ class _BulkCleanScreenState extends State<BulkCleanScreen> {
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (dialogContext) => AlertDialog(
+        scrollable: true,
         title: const Text('Stop cleanup?'),
         content: const Text(
           'Messages already moved will stay in Trash. A small number of actions already in progress may finish, but all remaining messages will stay in your inbox.',
@@ -491,7 +472,10 @@ class _BulkCleanScreenState extends State<BulkCleanScreen> {
           ),
           FilledButton.icon(
             onPressed: () => Navigator.pop(dialogContext, true),
-            style: FilledButton.styleFrom(backgroundColor: AppColors.danger),
+            style: FilledButton.styleFrom(
+              backgroundColor: Theme.of(context).colorScheme.error,
+              foregroundColor: Theme.of(context).colorScheme.onError,
+            ),
             icon: const Icon(Icons.stop_circle_outlined),
             label: const Text('Stop cleanup'),
           ),
@@ -648,7 +632,9 @@ class _CleanupProgressCard extends StatelessWidget {
               if (failed > 0)
                 _CleanupFact(
                   icon: Icons.error_outline_rounded,
-                  label: finished ? '$failed failed' : '$failed issue so far',
+                  label: finished
+                      ? '$failed failed'
+                      : '$failed issue${failed == 1 ? '' : 's'} so far',
                   color: AppColors.danger,
                 ),
               if (remaining > 0)
@@ -703,63 +689,6 @@ class _CleanupProgressCard extends StatelessWidget {
   }
 }
 
-class _CleanStat extends StatelessWidget {
-  const _CleanStat({
-    required this.icon,
-    required this.color,
-    required this.value,
-    required this.label,
-  });
-
-  final IconData icon;
-  final Color color;
-  final String value;
-  final String label;
-
-  @override
-  Widget build(BuildContext context) {
-    final resolvedColor = AppColors.foregroundFor(context, color);
-    return SizedBox(
-      height: 150,
-      child: AppCard(
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 16),
-        child: Column(
-          children: [
-            Container(
-              width: 38,
-              height: 38,
-              decoration: BoxDecoration(
-                color: AppColors.softFill(context, color),
-                borderRadius: BorderRadius.circular(12),
-              ),
-              child: Icon(icon, color: resolvedColor, size: 19),
-            ),
-            const SizedBox(height: 11),
-            Text(
-              value,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: Theme.of(context).textTheme.titleLarge,
-            ),
-            const SizedBox(height: 7),
-            Expanded(
-              child: Center(
-                child: Text(
-                  label,
-                  textAlign: TextAlign.center,
-                  maxLines: 2,
-                  overflow: TextOverflow.ellipsis,
-                  style: Theme.of(context).textTheme.bodyMedium,
-                ),
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
 class _CleanupSuggestionCard extends StatelessWidget {
   const _CleanupSuggestionCard({
     required this.suggestion,
@@ -779,31 +708,17 @@ class _CleanupSuggestionCard extends StatelessWidget {
   Widget build(BuildContext context) {
     return AppCard(
       key: ValueKey('cleanup-suggestion-${suggestion.id}'),
-      padding: const EdgeInsets.all(15),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      radius: 12,
       color: selected
           ? AppColors.softFill(context, AppColors.primary)
-          : AppColors.surface(context),
-      borderColor: selected ? AppColors.primary : AppColors.borderFor(context),
+          : Theme.of(context).colorScheme.surfaceContainer,
       onTap: enabled ? () => onSelected(!selected) : null,
       child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Container(
-                width: 42,
-                height: 42,
-                decoration: BoxDecoration(
-                  color: AppColors.softFill(context, AppColors.primary),
-                  borderRadius: BorderRadius.circular(13),
-                ),
-                child: Icon(
-                  _cleanupIcon(suggestion.categoryKey),
-                  size: 20,
-                  color: AppColors.primary,
-                ),
-              ),
+              Icon(_cleanupIcon(suggestion.categoryKey), size: 24),
               const SizedBox(width: 12),
               Expanded(
                 child: Column(
@@ -813,9 +728,11 @@ class _CleanupSuggestionCard extends StatelessWidget {
                       suggestion.category,
                       style: Theme.of(context).textTheme.titleMedium,
                     ),
-                    const SizedBox(height: 4),
+                    const SizedBox(height: 3),
                     Text(
                       _cleanupDescription(suggestion.categoryKey),
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
                       style: Theme.of(context).textTheme.bodySmall,
                     ),
                   ],
@@ -827,40 +744,24 @@ class _CleanupSuggestionCard extends StatelessWidget {
                 onChanged: enabled
                     ? (value) => onSelected(value ?? false)
                     : null,
-                visualDensity: VisualDensity.compact,
               ),
             ],
           ),
-          const SizedBox(height: 12),
           Wrap(
-            spacing: 8,
-            runSpacing: 8,
+            alignment: WrapAlignment.spaceBetween,
+            crossAxisAlignment: WrapCrossAlignment.center,
+            spacing: 12,
             children: [
-              _CleanupFact(
-                icon: Icons.mail_outline_rounded,
-                label: '${_formatNumber(suggestion.messageCount)} matches',
-                color: AppColors.primary,
+              Text(
+                '${_formatNumber(suggestion.messageCount)} emails · ${_formatBytes(suggestion.estimatedSpaceBytes)}',
+                style: Theme.of(context).textTheme.bodySmall,
               ),
-              _CleanupFact(
-                icon: Icons.sd_storage_outlined,
-                label: _formatBytes(suggestion.estimatedSpaceBytes),
-                color: AppColors.indigo,
-              ),
-            ],
-          ),
-          const SizedBox(height: 12),
-          Row(
-            children: [
-              Expanded(
-                child: Text(
-                  _cleanupCriteria(suggestion.categoryKey),
-                  style: Theme.of(context).textTheme.labelSmall,
+              Tooltip(
+                message: _cleanupCriteria(suggestion.categoryKey),
+                child: TextButton(
+                  onPressed: onReview,
+                  child: const Text('Review messages'),
                 ),
-              ),
-              TextButton.icon(
-                onPressed: onReview,
-                icon: const Icon(Icons.visibility_outlined, size: 17),
-                label: const Text('Review messages'),
               ),
             ],
           ),
@@ -916,83 +817,13 @@ class _CleanupHero extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.all(22),
-      decoration: BoxDecoration(
-        color: AppColors.surface(context),
-        borderRadius: BorderRadius.circular(20),
-        border: Border.all(color: AppColors.borderFor(context)),
-      ),
-      child: Row(
-        children: [
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Container(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 10,
-                    vertical: 6,
-                  ),
-                  decoration: BoxDecoration(
-                    color: AppColors.softFill(context, AppColors.primary),
-                    borderRadius: BorderRadius.circular(999),
-                  ),
-                  child: Text(
-                    loading
-                        ? 'ANALYZING INBOX'
-                        : '$suggestionCount CLEANUP GROUP${suggestionCount == 1 ? '' : 'S'}',
-                    style: const TextStyle(
-                      color: AppColors.primary,
-                      fontSize: 10,
-                      fontWeight: FontWeight.w800,
-                      letterSpacing: 0.7,
-                    ),
-                  ),
-                ),
-                const SizedBox(height: 14),
-                Text(
-                  'A cleaner inbox,\non your terms.',
-                  style: Theme.of(context).textTheme.headlineSmall?.copyWith(
-                    fontSize: 24,
-                    height: 1.15,
-                    fontWeight: FontWeight.w800,
-                  ),
-                ),
-                const SizedBox(height: 9),
-                Text(
-                  'Review every group before messages are removed from your inbox.',
-                  style: Theme.of(
-                    context,
-                  ).textTheme.bodySmall?.copyWith(fontSize: 12, height: 1.45),
-                ),
-              ],
-            ),
-          ),
-          const SizedBox(width: 14),
-          Container(
-            width: 70,
-            height: 70,
-            decoration: BoxDecoration(
-              color: AppColors.softFill(context, AppColors.primary),
-              shape: BoxShape.circle,
-            ),
-            child: loading
-                ? const Padding(
-                    padding: EdgeInsets.all(22),
-                    child: CircularProgressIndicator(
-                      color: AppColors.primary,
-                      strokeWidth: 2.5,
-                    ),
-                  )
-                : const Icon(
-                    Icons.auto_awesome_rounded,
-                    color: AppColors.primary,
-                    size: 31,
-                  ),
-          ),
-        ],
+    return Align(
+      alignment: Alignment.centerLeft,
+      child: Text(
+        loading
+            ? 'Finding emails you can clean up…'
+            : '$suggestionCount groups to review. Nothing moves to Trash until you confirm.',
+        style: Theme.of(context).textTheme.bodyMedium,
       ),
     );
   }

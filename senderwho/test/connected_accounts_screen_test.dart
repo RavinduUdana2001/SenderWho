@@ -142,6 +142,8 @@ void main() {
 
       expect(find.text('first@gmail.com'), findsOneWidget);
       expect(find.text('second@yahoo.com'), findsOneWidget);
+      await tester.tap(find.byKey(const ValueKey('add-mailbox-section')));
+      await tester.pumpAndSettle();
       expect(find.byKey(const ValueKey('add-gmail-account')), findsOneWidget);
       expect(
         find.byKey(const ValueKey('add-microsoft-account')),

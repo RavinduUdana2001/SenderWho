@@ -10,6 +10,7 @@ import '../auth/session_store.dart';
 import '../config/app_config.dart';
 import '../models/app_models.dart';
 import '../utils/user_friendly_error.dart';
+import 'api_transport.dart';
 
 class SenderWhoRequestException implements Exception {
   const SenderWhoRequestException(this.message);
@@ -40,6 +41,7 @@ class DashboardSummary {
     required this.syncStatus,
     required this.syncError,
     this.syncRecoveryAction = 'NONE',
+    this.syncRetryAt,
     required this.connectedAccountId,
     required this.connectedEmail,
     required this.lastSyncedAt,
@@ -63,6 +65,7 @@ class DashboardSummary {
   final String? syncStatus;
   final String? syncError;
   final String syncRecoveryAction;
+  final DateTime? syncRetryAt;
   final String? connectedAccountId;
   final String? connectedEmail;
   final DateTime? lastSyncedAt;
@@ -101,15 +104,13 @@ class DashboardSummary {
           (opportunities['unsubscribeSenders'] as num?)?.round() ?? 0,
       syncStatus: sync?['syncStatus'] as String?,
       syncError: switch (sync?['lastSyncError']) {
-        final String message when message.trim().isNotEmpty =>
-          sanitizeUserMessage(
-            message,
-            fallback:
-                'Email syncing needs attention. Reconnect the account or try again.',
-          ),
+        final String message when message.trim().isNotEmpty => mailboxSyncError(
+          message,
+        ),
         _ => null,
       },
       syncRecoveryAction: (sync?['recoveryAction'] as String?) ?? 'NONE',
+      syncRetryAt: DateTime.tryParse((sync?['syncRetryAt'] as String?) ?? ''),
       connectedAccountId: sync?['id'] as String?,
       connectedEmail: sync?['emailAddress'] as String?,
       lastSyncedAt: DateTime.tryParse((sync?['lastSyncedAt'] as String?) ?? ''),
@@ -209,6 +210,7 @@ class SenderWhoRepository {
     Future<bool> Function(Uri uri)? launchExternal,
     bool? previewMode,
     this.oauthPollInterval = const Duration(seconds: 2),
+    this.requestTimeout = const Duration(seconds: 15),
     this.baseUrl = AppConfig.apiBaseUrl,
   }) : _client = client ?? http.Client(),
        _sessionStore = sessionStore ?? SecureSessionStore(),
@@ -222,6 +224,7 @@ class SenderWhoRepository {
   final Future<bool> Function(Uri uri) _launchExternal;
   final bool previewMode;
   final Duration oauthPollInterval;
+  final Duration requestTimeout;
   final String baseUrl;
   String? _accessToken;
   String? _refreshToken;
@@ -230,13 +233,51 @@ class SenderWhoRepository {
   String? _lastError;
   AppSettings? _previewSettings;
   Future<bool>? _refreshInFlight;
+  Future<void> _sessionWrite = Future.value();
   Future<bool>? _oauthInFlight;
   int _oauthAttempt = 0;
   final ValueNotifier<bool> authenticationState = ValueNotifier(false);
 
+  final userProfile = ValueNotifier<UserProfile?>(null);
+  final connectedAccounts = ValueNotifier<List<ConnectedEmailAccount>>(
+    const [],
+  );
+  final activeMailbox = ValueNotifier<ConnectedEmailAccount?>(null);
+  final mailboxRevision = ValueNotifier<int>(0);
+  final switchingMailbox = ValueNotifier<String?>(null);
+  Future<bool>? _mailboxSwitchInFlight;
+  Future<UserProfile?>? _profileInFlight;
+  Future<List<ConnectedEmailAccount>>? _accountsInFlight;
+  bool _mailboxContextLoaded = false;
+  int _identityGeneration = 0;
+
+  Future<UserProfile?> getUserProfile({bool refresh = false}) {
+    if (!refresh && userProfile.value != null) {
+      return Future.value(userProfile.value);
+    }
+    final existing = _profileInFlight;
+    if (existing != null) return existing;
+    final operation = _loadUserProfile();
+    _profileInFlight = operation;
+    return operation.whenComplete(() {
+      if (identical(_profileInFlight, operation)) _profileInFlight = null;
+    });
+  }
+
+  Future<UserProfile?> _loadUserProfile() async {
+    final generation = _identityGeneration;
+    final json = await _getJson('auth/me');
+    if (json == null || generation != _identityGeneration) return null;
+    final profile = UserProfile.fromJson(json);
+    if (profile.email.isEmpty) return null;
+    userProfile.value = profile;
+    return profile;
+  }
+
   bool get isAuthenticated => _refreshToken != null;
   String? get userEmail => previewMode ? 'UI preview' : _userEmail;
-  String? get lastError => _lastError;
+  String? get lastError =>
+      _lastError == null ? null : sanitizeUserMessage(_lastError);
 
   Future<String?> rememberedEmail() async {
     try {
@@ -291,21 +332,32 @@ class SenderWhoRepository {
 
   void cancelOAuth() {
     _oauthAttempt += 1;
+    _oauthInFlight = null;
     _lastError = 'Sign-in was canceled.';
   }
 
   Future<bool> restoreSession() async {
+    final generation = _identityGeneration;
     try {
-      await _ensureDeviceId();
-      _refreshToken = await _sessionStore.readRefreshToken();
+      return await (() async {
+        await _ensureDeviceId();
+        final saved = await _sessionStore.readRefreshToken();
+        if (generation != _identityGeneration) return false;
+        _refreshToken = saved;
+        if (saved == null) return false;
+        return _refreshSession();
+      })().timeout(const Duration(seconds: 4));
+    } on TimeoutException {
+      // Show welcome within the launch budget. The refresh may still finish
+      // and save rotated credentials; its identity/OAuth guards protect a new
+      // sign-in. Never discard a rotated refresh token merely for a UI timeout.
+      return false;
     } on Object catch (error) {
       debugPrint('Could not read the secure session: $error');
       _refreshToken = null;
       authenticationState.value = false;
       return false;
     }
-    if (_refreshToken == null) return false;
-    return _refreshSession();
   }
 
   Future<void> logout() async {
@@ -335,6 +387,7 @@ class SenderWhoRepository {
     String kind = 'ALL',
     String control = 'ALL',
     String query = '',
+    String? category,
   }) async {
     final encoded = Uri(
       queryParameters: {
@@ -342,7 +395,10 @@ class SenderWhoRepository {
         'limit': '$limit',
         'kind': kind,
         'control': control,
+        if (activeMailbox.value case final mailbox?)
+          'emailAccountId': mailbox.id,
         if (query.trim().isNotEmpty) 'query': query.trim(),
+        if (category?.isNotEmpty == true) 'category': category!,
       },
     ).query;
     final json = await _getJson('senders?$encoded');
@@ -388,10 +444,50 @@ class SenderWhoRepository {
     return InboxHealthSummary.fromJson(json);
   }
 
-  Future<List<ConnectedEmailAccount>> getConnectedAccounts() async {
-    final json = await _getRequiredJson('email-accounts');
+  Future<List<ConnectedEmailAccount>> getConnectedAccounts() {
+    final pending = _accountsInFlight;
+    if (pending != null) return pending;
+    late final Future<List<ConnectedEmailAccount>> operation;
+    operation = _loadConnectedAccounts().whenComplete(() {
+      if (identical(_accountsInFlight, operation)) _accountsInFlight = null;
+    });
+    _accountsInFlight = operation;
+    return operation;
+  }
+
+  Future<List<ConnectedEmailAccount>> _loadConnectedAccounts() async {
+    final generation = _identityGeneration;
+    final revision = mailboxRevision.value;
+    Map<String, dynamic> json;
+    try {
+      json = await _getRequiredJson('email-accounts');
+    } on Object {
+      if (generation != _identityGeneration) return const [];
+      if (revision != mailboxRevision.value) return connectedAccounts.value;
+      rethrow;
+    }
+    if (generation != _identityGeneration) return const [];
+    if (revision != mailboxRevision.value) return connectedAccounts.value;
+    if (json['items'] is! List) {
+      throw const SenderWhoRequestException(
+        'Your mailboxes could not be loaded. Please try again.',
+      );
+    }
+    final previousId = activeMailbox.value?.id;
+    final wasLoaded = _mailboxContextLoaded;
     final items = _itemsFrom(json['items']);
-    return items.map(ConnectedEmailAccount.fromJson).toList();
+    final accounts = items.map(ConnectedEmailAccount.fromJson).toList();
+    connectedAccounts.value = List.unmodifiable(accounts);
+    activeMailbox.value = accounts
+        .where((account) => account.isActive)
+        .firstOrNull;
+    _mailboxContextLoaded = true;
+    if (wasLoaded && previousId != activeMailbox.value?.id) {
+      // Discovery can repair a missing/invalid primary or observe a selection
+      // made on another device. Existing screens must not keep the old rows.
+      mailboxRevision.value++;
+    }
+    return accounts;
   }
 
   Future<List<CategoryItem>> getCategories() async {
@@ -406,10 +502,39 @@ class SenderWhoRepository {
     return items.map(CleanupSuggestion.fromJson).toList();
   }
 
+  Future<UnsubscribeCandidatePage?> getUnsubscribePage({
+    int page = 1,
+    int limit = 25,
+    String query = '',
+    String filter = 'ALL',
+    RequestCancellation? cancellation,
+  }) async {
+    final encoded = Uri(
+      queryParameters: {
+        'page': '$page',
+        'limit': '$limit',
+        'filter': filter,
+        if (query.trim().isNotEmpty) 'query': query.trim(),
+        if (activeMailbox.value case final account?)
+          'emailAccountId': account.id,
+      },
+    ).query;
+    final json = await _requestJson(
+      'GET',
+      'unsubscribe/candidates?$encoded',
+      cancellation: cancellation,
+    );
+    return json == null ? null : UnsubscribeCandidatePage.fromJson(json);
+  }
+
   Future<List<UnsubscribeCandidate>> getUnsubscribeCandidates() async {
-    final json = await _getRequiredJson('unsubscribe/candidates');
-    final items = _itemsFrom(json['items']);
-    return items.map(UnsubscribeCandidate.fromJson).toList();
+    final page = await getUnsubscribePage();
+    if (page == null) {
+      throw SenderWhoRequestException(
+        lastError ?? 'Subscriptions could not be loaded.',
+      );
+    }
+    return page.items;
   }
 
   Future<List<EmailItem>> getPromotionEmails() async {
@@ -432,6 +557,7 @@ class SenderWhoRepository {
       'page': '$page',
       'limit': '$limit',
       'mailbox': mailbox,
+      if (activeMailbox.value case final account?) 'emailAccountId': account.id,
     };
     if (query?.trim().isNotEmpty == true) parameters['query'] = query!.trim();
     if (category?.isNotEmpty == true) parameters['category'] = category!;
@@ -495,9 +621,12 @@ class SenderWhoRepository {
     required bool unread,
     int page = 1,
     int limit = 25,
+    RequestCancellation? cancellation,
   }) async {
-    final json = await _postJson(
+    final json = await _requestJson(
+      'POST',
       'search',
+      cancellation: cancellation,
       body: {
         'query': query,
         'selected': selected.toList(),
@@ -646,6 +775,7 @@ class SenderWhoRepository {
         authenticated: false,
         allowRefresh: false,
       );
+      if (attempt != _oauthAttempt) return false;
       final status = exchange?['status'] as String?;
       if (status == 'PENDING') continue;
       if (exchange == null) {
@@ -662,7 +792,11 @@ class SenderWhoRepository {
         return false;
       }
       if (status == 'AUTHENTICATED') {
-        return _acceptSession(exchange, provider: flowProvider);
+        return _acceptSession(
+          exchange,
+          provider: flowProvider,
+          oauthAttempt: attempt,
+        );
       }
       if (status == 'REAUTHENTICATED' && authenticatedStart) {
         final accessToken = exchange['accessToken'] as String?;
@@ -676,6 +810,16 @@ class SenderWhoRepository {
         return true;
       }
       if (status == 'ACCOUNT_CONNECTED' && authenticatedStart) {
+        connectedAccounts.value = const [];
+        activeMailbox.value = null;
+        _mailboxContextLoaded = false;
+        _accountsInFlight = null;
+        try {
+          await getConnectedAccounts();
+        } on Object {
+          // The account menu can retry discovery without repeating OAuth.
+        }
+        mailboxRevision.value++;
         return true;
       }
       _lastError =
@@ -700,14 +844,78 @@ class SenderWhoRepository {
     return json != null;
   }
 
-  Future<bool> activateEmailAccount(String id) async {
+  Future<bool> activateEmailAccount(String id) {
+    final pending = _mailboxSwitchInFlight;
+    if (pending != null) {
+      return switchingMailbox.value == id ? pending : Future.value(false);
+    }
+    final operation = _activateEmailAccount(id);
+    _mailboxSwitchInFlight = operation;
+    return operation.whenComplete(() {
+      if (identical(_mailboxSwitchInFlight, operation)) {
+        _mailboxSwitchInFlight = null;
+        switchingMailbox.value = null;
+      }
+    });
+  }
+
+  Future<bool> _activateEmailAccount(String id) async {
+    switchingMailbox.value = id;
+    final generation = _identityGeneration;
+    // Keep the selected row while a concurrent account refresh replaces the
+    // list. Activation must never succeed with an empty visible identity.
+    final requested = connectedAccounts.value
+        .where((account) => account.id == id)
+        .firstOrNull;
     final json = await _postJson('email-accounts/$id/activate');
-    return json?['isActive'] == true;
+    if (generation != _identityGeneration) return false;
+    if (json?['isActive'] != true || json?['id'] != id) {
+      _lastError ??= 'Couldn’t switch mailboxes. Refresh your accounts.';
+      return false;
+    }
+    final selected =
+        connectedAccounts.value
+            .where((account) => account.id == id)
+            .firstOrNull ??
+        requested ??
+        ((json?['emailAddress'] as String?)?.trim().isNotEmpty == true
+            ? ConnectedEmailAccount.fromJson(json!)
+            : null);
+    if (selected == null) {
+      _lastError = 'Couldn’t switch mailboxes. Refresh your accounts.';
+      return false;
+    }
+    final accounts = connectedAccounts.value
+        .map(
+          (account) => account.id == id
+              ? selected.copyWith(isActive: true)
+              : account.copyWith(isActive: false),
+        )
+        .toList();
+    if (!accounts.any((account) => account.id == id)) {
+      accounts.add(selected.copyWith(isActive: true));
+    }
+    connectedAccounts.value = List.unmodifiable(accounts);
+    activeMailbox.value = selected.copyWith(isActive: true);
+    _mailboxContextLoaded = true;
+    mailboxRevision.value++;
+    return true;
   }
 
   Future<DisconnectAccountResult?> disconnectAccount(String id) async {
     final json = await _deleteJson('email-accounts/$id');
-    return json == null ? null : DisconnectAccountResult.fromJson(json);
+    if (json == null) return null;
+    final result = DisconnectAccountResult.fromJson(json);
+    if (result.disconnected) {
+      connectedAccounts.value = connectedAccounts.value
+          .where((account) => account.id != id)
+          .toList();
+      if (activeMailbox.value?.id == id) activeMailbox.value = null;
+      _mailboxContextLoaded = false;
+      _accountsInFlight = null;
+      mailboxRevision.value++;
+    }
+    return result;
   }
 
   Future<CleanupJobInfo?> createCleanupJob({
@@ -886,11 +1094,43 @@ class SenderWhoRepository {
   Future<UnsubscribeBatchResult?> createUnsubscribeJobs(
     List<String> senderIds,
   ) async {
-    final json = await _postJson(
-      'unsubscribe/jobs/batch',
-      body: {'senderIds': senderIds},
-    );
-    return json == null ? null : UnsubscribeBatchResult.fromJson(json);
+    final ids = senderIds.toSet().toList();
+    final jobs = <UnsubscribeJobInfo>[];
+    final failures = <UnsubscribeBatchFailure>[];
+    final generation = _identityGeneration;
+    final revision = mailboxRevision.value;
+    for (var start = 0; start < ids.length; start += 25) {
+      final batch = ids.skip(start).take(25).toList();
+      Map<String, dynamic>? json;
+      if (generation == _identityGeneration &&
+          revision == mailboxRevision.value) {
+        json = await _postJson(
+          'unsubscribe/jobs/batch',
+          body: {'senderIds': batch},
+        );
+      }
+      if (json == null) {
+        // Do not keep sending more mutations after a timeout, account switch,
+        // or rate limit. Successful chunks remain successful; other rows retry.
+        failures.addAll(
+          ids
+              .skip(start)
+              .map(
+                (id) => UnsubscribeBatchFailure(
+                  senderId: id,
+                  reason:
+                      _lastError ??
+                      'Request was not confirmed. Refresh progress before retrying.',
+                ),
+              ),
+        );
+        break;
+      }
+      final result = UnsubscribeBatchResult.fromJson(json);
+      jobs.addAll(result.jobs);
+      failures.addAll(result.failures);
+    }
+    return UnsubscribeBatchResult(jobs: jobs, failures: failures);
   }
 
   Future<UnsubscribeJobInfo?> getUnsubscribeJob(String id) async {
@@ -899,17 +1139,21 @@ class SenderWhoRepository {
   }
 
   Future<List<UnsubscribeJobInfo>> getUnsubscribeJobs(List<String> ids) async {
-    if (ids.isEmpty) return const [];
-    final json = await _postJson(
-      'unsubscribe/jobs/status',
-      body: {'jobIds': ids},
-    );
-    if (json == null) {
-      throw SenderWhoRequestException(
-        _lastError ?? 'Unsubscribe progress could not be refreshed.',
+    final unique = ids.toSet().toList();
+    final jobs = <UnsubscribeJobInfo>[];
+    for (var start = 0; start < unique.length; start += 25) {
+      final json = await _postJson(
+        'unsubscribe/jobs/status',
+        body: {'jobIds': unique.skip(start).take(25).toList()},
       );
+      if (json == null) {
+        throw SenderWhoRequestException(
+          _lastError ?? 'Unsubscribe progress could not be refreshed.',
+        );
+      }
+      jobs.addAll(_itemsFrom(json['items']).map(UnsubscribeJobInfo.fromJson));
     }
-    return _itemsFrom(json['items']).map(UnsubscribeJobInfo.fromJson).toList();
+    return jobs;
   }
 
   Future<List<UnsubscribeJobInfo>> getActiveUnsubscribeJobs() async {
@@ -956,6 +1200,16 @@ class SenderWhoRepository {
 
   Future<int?> revokeAllSessions() async {
     final json = await _postJson('auth/sessions/revoke-all');
+    if (json == null) return null;
+    final count = (json['revokedSessions'] as num?)?.round() ?? 0;
+    await _clearSession();
+    return count;
+  }
+
+  Future<int?> revokeSessionsAfterProviderPasswordChange() async {
+    final json = await _postJson(
+      'auth/sessions/revoke-after-provider-password-change',
+    );
     if (json == null) return null;
     final count = (json['revokedSessions'] as num?)?.round() ?? 0;
     await _clearSession();
@@ -1017,8 +1271,16 @@ class SenderWhoRepository {
   }
 
   Future<bool> deleteAccount() async {
+    if (previewMode) {
+      _lastError = 'Account deletion is unavailable in preview mode.';
+      return false;
+    }
     final json = await _deleteJson('users/me');
-    if (json == null) return false;
+    if (json?['success'] != true) {
+      _lastError ??=
+          'Couldn’t delete your SenderWho account. Please try again.';
+      return false;
+    }
     await _clearSession();
     return true;
   }
@@ -1074,10 +1336,63 @@ class SenderWhoRepository {
     bool allowRefresh = true,
     bool allowStepUp = true,
     String? idempotencyKey,
+    RequestCancellation? cancellation,
   }) async {
+    final generation = _identityGeneration;
+    final revision = mailboxRevision.value;
     try {
       _lastError = null;
-      final request = http.Request(method, Uri.parse('$baseUrl/$path'));
+      var uri = Uri.parse('$baseUrl/$path');
+      final endpoint = path.split('?').first;
+      // Resolve (and, on the server, repair) the selected mailbox before any
+      // mailbox list/count request. First login must not race account discovery.
+      const mailboxReads = {
+        'dashboard',
+        'senders',
+        'senders/top',
+        'emails',
+        'emails/promotions',
+        'unsubscribe/candidates',
+        'unsubscribe/jobs',
+        'categories',
+        'cleanup/suggestions',
+        'cleanup/jobs',
+        'activity',
+        'inbox-health',
+        'security-alerts',
+        'search',
+        'settings',
+        'privacy-security',
+      };
+      if (authenticated &&
+          (method == 'GET' || (method == 'POST' && endpoint == 'search')) &&
+          isAuthenticated &&
+          mailboxReads.contains(endpoint)) {
+        if (!_mailboxContextLoaded && activeMailbox.value == null) {
+          await getConnectedAccounts();
+        }
+        if (generation != _identityGeneration ||
+            revision != mailboxRevision.value ||
+            cancellation?.isCancelled == true) {
+          return null;
+        }
+        // These list endpoints accept an explicit account. Add it after account
+        // discovery, rather than encoding a null/default account before waiting.
+        if (const {
+              'senders',
+              'emails',
+              'unsubscribe/candidates',
+            }.contains(endpoint) &&
+            activeMailbox.value != null) {
+          uri = uri.replace(
+            queryParameters: {
+              ...uri.queryParameters,
+              'emailAccountId': activeMailbox.value!.id,
+            },
+          );
+        }
+      }
+      final request = http.Request(method, uri);
       request.headers['Content-Type'] = 'application/json';
       final deviceId = await _ensureDeviceId();
       request.headers['X-SenderWho-Device-Id'] = deviceId;
@@ -1089,14 +1404,25 @@ class SenderWhoRepository {
         request.headers['Authorization'] = 'Bearer $_accessToken';
       }
       if (body != null) request.body = jsonEncode(body);
-      final streamed = await _client
-          .send(request)
-          .timeout(const Duration(seconds: 15));
-      final response = await http.Response.fromStream(streamed);
+      final response = await sendApiRequest(
+        _client,
+        request,
+        timeout: requestTimeout,
+        cancellation: cancellation,
+      );
+      if (cancellation?.isCancelled == true) return null;
+      if (authenticated &&
+          (generation != _identityGeneration ||
+              revision != mailboxRevision.value)) {
+        return null;
+      }
       if (response.statusCode == 401 && authenticated && allowStepUp) {
-        final message = _errorMessageFromResponse(response);
-        if (message.contains('Recent authentication is required')) {
-          _lastError = message;
+        // Decide authentication flow from the service response, independently
+        // of the user-facing wording produced by the error formatter.
+        if (isRecentAuthenticationRequired(
+          _serverMessageFromResponse(response),
+        )) {
+          _lastError = _errorMessageFromResponse(response);
           if (await reauthenticate()) {
             return _requestJson(
               method,
@@ -1106,6 +1432,7 @@ class SenderWhoRepository {
               allowRefresh: allowRefresh,
               allowStepUp: false,
               idempotencyKey: idempotencyKey,
+              cancellation: cancellation,
             );
           }
           return null;
@@ -1123,6 +1450,7 @@ class SenderWhoRepository {
           allowRefresh: false,
           allowStepUp: allowStepUp,
           idempotencyKey: idempotencyKey,
+          cancellation: cancellation,
         );
       }
       if (response.statusCode < 200 || response.statusCode >= 300) {
@@ -1132,6 +1460,11 @@ class SenderWhoRepository {
       if (response.body.isEmpty) return <String, dynamic>{};
       final decoded = jsonDecode(response.body);
       return decoded is Map<String, dynamic> ? decoded : <String, dynamic>{};
+    } on SenderWhoRequestException catch (error) {
+      _lastError = error.message;
+      return null;
+    } on http.RequestAbortedException {
+      return null;
     } on TimeoutException {
       _lastError = 'The server took too long to respond.';
       return null;
@@ -1146,11 +1479,14 @@ class SenderWhoRepository {
     if (active != null) return active;
     final refresh = _performRefresh();
     _refreshInFlight = refresh;
-    return refresh.whenComplete(() => _refreshInFlight = null);
+    return refresh.whenComplete(() {
+      if (identical(_refreshInFlight, refresh)) _refreshInFlight = null;
+    });
   }
 
   Future<bool> _performRefresh() async {
     final refreshToken = _refreshToken;
+    final generation = _identityGeneration;
     if (refreshToken == null) return false;
     try {
       final request = http.Request('POST', Uri.parse('$baseUrl/auth/refresh'));
@@ -1159,10 +1495,14 @@ class SenderWhoRepository {
       request.headers['X-SenderWho-Device-Id'] = deviceId;
       request.headers['X-SenderWho-Device-Name'] = _deviceName();
       request.body = jsonEncode({'refreshToken': refreshToken});
-      final streamed = await _client
-          .send(request)
-          .timeout(const Duration(seconds: 15));
-      final response = await http.Response.fromStream(streamed);
+      final response = await sendApiRequest(
+        _client,
+        request,
+        timeout: requestTimeout,
+      );
+      if (generation != _identityGeneration || refreshToken != _refreshToken) {
+        return false;
+      }
       if (response.statusCode == 401 || response.statusCode == 403) {
         await _clearSession();
         return false;
@@ -1182,7 +1522,9 @@ class SenderWhoRepository {
   Future<bool> _acceptSession(
     Map<String, dynamic> json, {
     String? provider,
+    int? oauthAttempt,
   }) async {
+    final generation = _identityGeneration;
     final accessToken = json['accessToken'] as String?;
     final refreshToken = json['refreshToken'] as String?;
     final user = json['user'] as Map<String, dynamic>?;
@@ -1191,16 +1533,44 @@ class SenderWhoRepository {
     try {
       // Persist first so the repository never reports an authenticated session
       // that cannot survive an app restart.
-      await _sessionStore.writeRefreshToken(refreshToken);
+      final write = _sessionWrite.catchError((Object _) {}).then((_) async {
+        if (generation != _identityGeneration ||
+            (oauthAttempt != null && oauthAttempt != _oauthAttempt)) {
+          return;
+        }
+        await _sessionStore.writeRefreshToken(refreshToken);
+      });
+      _sessionWrite = write;
+      await write;
     } on Object catch (error) {
       debugPrint('Could not save the secure session: $error');
       _lastError = 'The secure session could not be saved on this device.';
       return false;
     }
 
+    if (generation != _identityGeneration ||
+        (oauthAttempt != null && oauthAttempt != _oauthAttempt)) {
+      return false;
+    }
+
+    final changedIdentity = _userEmail != null && user?['email'] != _userEmail;
     _accessToken = accessToken;
     _refreshToken = refreshToken;
-    _userEmail = user?['email'] as String?;
+    final emailFromSession = user?['email'] as String?;
+    if (emailFromSession != null && emailFromSession != _userEmail) {
+      _identityGeneration++;
+      _profileInFlight = null;
+      _accountsInFlight = null;
+      _mailboxContextLoaded = false;
+      userProfile.value = null;
+      connectedAccounts.value = const [];
+      activeMailbox.value = null;
+    }
+    _userEmail = emailFromSession ?? _userEmail;
+    if (user != null &&
+        (user['avatarUrl'] != null || user['displayName'] != null)) {
+      userProfile.value = UserProfile.fromJson(user);
+    }
     final email = _userEmail;
     if (email != null && email.isNotEmpty) {
       try {
@@ -1216,6 +1586,7 @@ class SenderWhoRepository {
       }
     }
     authenticationState.value = true;
+    if (changedIdentity) mailboxRevision.value++;
     return true;
   }
 
@@ -1223,9 +1594,22 @@ class SenderWhoRepository {
     _accessToken = null;
     _refreshToken = null;
     _userEmail = null;
+    _identityGeneration++;
+    _profileInFlight = null;
+    _accountsInFlight = null;
+    _mailboxContextLoaded = false;
+    _mailboxSwitchInFlight = null;
+    switchingMailbox.value = null;
+    userProfile.value = null;
+    connectedAccounts.value = const [];
+    activeMailbox.value = null;
     authenticationState.value = false;
     try {
-      await _sessionStore.clear();
+      final clear = _sessionWrite
+          .catchError((Object _) {})
+          .then((_) => _sessionStore.clear());
+      _sessionWrite = clear;
+      await clear;
     } on Object catch (error) {
       debugPrint('Could not clear the secure session: $error');
     }
@@ -1282,7 +1666,7 @@ class SenderWhoRepository {
   }
 }
 
-String _errorMessageFromResponse(http.Response response) {
+String? _serverMessageFromResponse(http.Response response) {
   String? serverMessage;
   try {
     final decoded = jsonDecode(response.body);
@@ -1297,9 +1681,13 @@ String _errorMessageFromResponse(http.Response response) {
   } on Object {
     // Use the status-based message below for non-JSON provider responses.
   }
+  return serverMessage;
+}
+
+String _errorMessageFromResponse(http.Response response) {
   return friendlyHttpErrorMessage(
     response.statusCode,
-    serverMessage: serverMessage,
+    serverMessage: _serverMessageFromResponse(response),
   );
 }
 

@@ -1,159 +1,123 @@
 import 'dart:math' as math;
-
 import 'package:flutter/material.dart';
-
 import '../theme/app_colors.dart';
 import '../theme/app_system_ui.dart';
 import '../utils/responsive.dart';
+import 'entry_artwork.dart';
 
-/// Shared viewport treatment for onboarding and authentication screens.
-///
-/// The intrinsic-height wrapper lets a short page use [Spacer] to balance its
-/// content vertically, while the scroll view remains available for compact
-/// phones, landscape, keyboards, and large accessibility text.
+/// A centered introduction with a bottom action area. Content and footer can
+/// scroll together when large text, landscape, or the keyboard reduce space.
 class ResponsiveEntryPage extends StatelessWidget {
   const ResponsiveEntryPage({
     super.key,
     required this.child,
+    this.footer,
     this.leading,
+    this.pinLeading = false,
     this.maxWidth = 420,
     this.topPadding = 18,
     this.bottomPadding = 22,
+    this.contentAlignment = Alignment.center,
   });
-
   final Widget child;
-  final Widget? leading;
-  final double maxWidth;
-  final double topPadding;
-  final double bottomPadding;
+  final Widget? footer, leading;
+  final bool pinLeading;
+  final double maxWidth, topPadding, bottomPadding;
+  final Alignment contentAlignment;
 
   @override
-  Widget build(BuildContext context) {
-    return AnnotatedRegion(
-      value: AppSystemUi.style(context),
-      child: Scaffold(
-        body: DecoratedBox(
-          decoration: BoxDecoration(
-            color: AppColors.pageBackground(context),
-            gradient: LinearGradient(
-              begin: Alignment.topCenter,
-              end: const Alignment(0, 0.45),
-              colors: AppColors.pageGradient(context),
-            ),
-          ),
-          child: Stack(
-            fit: StackFit.expand,
-            children: [
-              const RepaintBoundary(child: _EntryAmbientBackground()),
-              SafeArea(
-                child: LayoutBuilder(
-                  builder: (context, viewport) {
-                    final horizontal = context.pageHorizontalPadding;
-                    final contentWidth = math.min(
-                      math.max(0.0, viewport.maxWidth - (horizontal * 2)),
-                      maxWidth,
-                    );
-                    final contentHeight = math.max(
-                      0.0,
-                      viewport.maxHeight - topPadding - bottomPadding,
-                    );
-
-                    return SingleChildScrollView(
-                      physics: switch (Theme.of(context).platform) {
-                        TargetPlatform.iOS ||
-                        TargetPlatform.macOS => const BouncingScrollPhysics(),
-                        _ => const ClampingScrollPhysics(),
-                      },
-                      keyboardDismissBehavior:
-                          ScrollViewKeyboardDismissBehavior.onDrag,
-                      padding: EdgeInsets.fromLTRB(
-                        horizontal,
-                        topPadding,
-                        horizontal,
-                        bottomPadding,
+  Widget build(BuildContext context) => AnnotatedRegion(
+    value: AppSystemUi.style(context),
+    child: Scaffold(
+      backgroundColor: AppColors.pageBackground(context),
+      body: Stack(
+        children: [
+          const Positioned.fill(child: EntryBackdrop()),
+          SafeArea(
+            child: Column(
+              children: [
+                if (leading != null && pinLeading)
+                  Align(
+                    alignment: Alignment.topCenter,
+                    child: ConstrainedBox(
+                      constraints: BoxConstraints(
+                        maxWidth: maxWidth + context.pageHorizontalPadding * 2,
                       ),
-                      child: Center(
-                        child: SizedBox(
-                          width: contentWidth,
+                      child: Padding(
+                        padding: EdgeInsets.fromLTRB(
+                          context.pageHorizontalPadding,
+                          8,
+                          context.pageHorizontalPadding,
+                          0,
+                        ),
+                        child: Align(
+                          alignment: Alignment.centerLeft,
+                          child: leading,
+                        ),
+                      ),
+                    ),
+                  ),
+                Expanded(
+                  child: LayoutBuilder(
+                    builder: (context, viewport) {
+                      final horizontal = context.pageHorizontalPadding;
+                      final width = math.min(
+                        math.max(0.0, viewport.maxWidth - horizontal * 2),
+                        maxWidth,
+                      );
+                      final height = math.max(
+                        0.0,
+                        viewport.maxHeight - topPadding - bottomPadding,
+                      );
+                      return SingleChildScrollView(
+                        keyboardDismissBehavior:
+                            ScrollViewKeyboardDismissBehavior.onDrag,
+                        padding: EdgeInsets.fromLTRB(
+                          horizontal,
+                          topPadding,
+                          horizontal,
+                          bottomPadding,
+                        ),
+                        child: Center(
                           child: ConstrainedBox(
                             constraints: BoxConstraints(
-                              minHeight: contentHeight,
+                              minHeight: height,
+                              maxWidth: width,
                             ),
-                            child: Stack(
-                              alignment: Alignment.center,
-                              children: [
-                                Align(
-                                  alignment: Alignment.center,
-                                  child: Padding(
-                                    padding: EdgeInsets.symmetric(
-                                      vertical: leading == null ? 0 : 54,
+                            child: IntrinsicHeight(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.stretch,
+                                children: [
+                                  if (leading != null && !pinLeading)
+                                    Align(
+                                      alignment: Alignment.centerLeft,
+                                      child: leading,
                                     ),
-                                    child: child,
+                                  Expanded(
+                                    child: Align(
+                                      alignment: contentAlignment,
+                                      child: child,
+                                    ),
                                   ),
-                                ),
-                                if (leading != null)
-                                  Positioned(top: 0, left: 0, child: leading!),
-                              ],
+                                  if (footer != null)
+                                    Padding(
+                                      padding: const EdgeInsets.only(top: 32),
+                                      child: footer!,
+                                    ),
+                                ],
+                              ),
                             ),
                           ),
                         ),
-                      ),
-                    );
-                  },
+                      );
+                    },
+                  ),
                 ),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-class _EntryAmbientBackground extends StatelessWidget {
-  const _EntryAmbientBackground();
-
-  @override
-  Widget build(BuildContext context) {
-    return IgnorePointer(
-      child: Stack(
-        children: [
-          Positioned(
-            top: -170,
-            right: -150,
-            child: _EntryGlow(color: AppColors.cyan, size: 340),
-          ),
-          Positioned(
-            bottom: -210,
-            left: -190,
-            child: _EntryGlow(color: AppColors.indigo, size: 390),
+              ],
+            ),
           ),
         ],
       ),
-    );
-  }
-}
-
-class _EntryGlow extends StatelessWidget {
-  const _EntryGlow({required this.color, required this.size});
-
-  final Color color;
-  final double size;
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      width: size,
-      height: size,
-      decoration: BoxDecoration(
-        shape: BoxShape.circle,
-        gradient: RadialGradient(
-          colors: [
-            AppColors.brandGlow(context, color),
-            color.withValues(alpha: 0),
-          ],
-        ),
-      ),
-    );
-  }
+    ),
+  );
 }

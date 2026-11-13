@@ -1,3 +1,4 @@
+import { mailboxScope } from "../common/mailbox-scope";
 import { NotFoundException } from "@nestjs/common";
 import { ListSecurityAlertsDto } from "./dto/list-security-alerts.dto";
 import { SecurityAlertsService } from "./security-alerts.service";
@@ -46,10 +47,10 @@ describe("SecurityAlertsService", () => {
       hasMore: false,
     });
     expect(prisma.securityAlert.count).toHaveBeenCalledWith({
-      where: { userId: "user-1", status: "OPEN" },
+      where: { ...mailboxScope("user-1"), status: "OPEN" },
     });
     expect(prisma.securityAlert.findMany).toHaveBeenCalledWith({
-      where: { userId: "user-1", status: "OPEN" },
+      where: { ...mailboxScope("user-1"), status: "OPEN" },
       orderBy: [{ riskLevel: "desc" }, { detectedAt: "desc" }],
       skip: 2,
       take: 2,

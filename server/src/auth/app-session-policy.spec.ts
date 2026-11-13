@@ -21,6 +21,10 @@ describe("persistent app-session policy", () => {
     ["export data", UsersController.prototype.exportData],
     ["revoke session", AuthController.prototype.revokeSession],
     ["revoke all sessions", AuthController.prototype.revokeAllSessions],
+    [
+      "revoke sessions after reported provider password change",
+      AuthController.prototype.revokeSessionsAfterProviderPasswordChange,
+    ],
   ])("%s uses the valid app session without provider re-login", (_, method) => {
     expect(
       Reflect.getMetadata(RECENT_AUTH_MAX_AGE_SECONDS_KEY, method),

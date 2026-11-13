@@ -1,88 +1,128 @@
 import 'dart:async';
-
 import 'package:flutter/material.dart';
-
 import '../config/app_config.dart';
-import '../models/app_models.dart';
-import '../screens/all_senders_screen.dart';
-import '../screens/bulk_clean_screen.dart';
-import '../screens/connect_email_screen.dart';
-import '../screens/connected_accounts_screen.dart';
-import '../screens/emails_screen.dart';
-import '../screens/inbox_health_screen.dart';
-import '../screens/search_filter_screen.dart';
-import '../screens/security_alerts_screen.dart';
-import '../screens/sender_details_screen.dart';
-import '../screens/unsubscribe_screen.dart';
+import '../services/repository_scope.dart';
 import '../services/senderwho_repository.dart';
-import '../theme/app_colors.dart';
-import '../utils/responsive.dart';
-import '../widgets/app_animated_progress.dart';
-import '../widgets/app_card.dart';
+import '../utils/app_navigation.dart';
+import '../utils/mail_date.dart';
+import '../widgets/app_async_state.dart';
+import '../widgets/app_header.dart';
 import '../widgets/app_page.dart';
+import '../widgets/mail_avatar.dart';
+import '../widgets/mailbox_sync_notice.dart';
+import 'all_senders_screen.dart';
+import 'bulk_clean_screen.dart';
+import 'connected_accounts_screen.dart';
+import 'emails_screen.dart';
+import 'inbox_health_screen.dart';
+import 'search_filter_screen.dart';
+import 'security_alerts_screen.dart';
+import 'sender_details_screen.dart';
+import 'unsubscribe_screen.dart';
 
 class DashboardScreen extends StatefulWidget {
-  const DashboardScreen({super.key});
-
+  const DashboardScreen({super.key, this.repository});
   static const routeName = '/dashboard';
-
+  final SenderWhoRepository? repository;
   @override
   State<DashboardScreen> createState() => _DashboardScreenState();
 }
 
 class _DashboardScreenState extends State<DashboardScreen>
     with WidgetsBindingObserver {
-  late Future<DashboardSummary> _dashboardFuture;
-  DashboardSummary? _cachedDashboard;
-  Timer? _refreshTimer;
-  bool _queueingScan = false;
-
+  SenderWhoRepository get _repository =>
+      widget.repository ?? RepositoryScope.read(context);
+  late Future<DashboardSummary> _future;
+  DashboardSummary? _cached;
+  Timer? _timer;
+  bool _loading = false;
+  bool _queueing = false;
+  bool _scanScheduled = false;
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
-    _dashboardFuture = _loadDashboard();
+    _future = _load();
   }
 
   @override
   void dispose() {
-    _refreshTimer?.cancel();
+    _timer?.cancel();
     WidgetsBinding.instance.removeObserver(this);
     super.dispose();
   }
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (state == AppLifecycleState.resumed) _refresh();
+    if (state == AppLifecycleState.resumed) {
+      _refresh();
+    } else {
+      _timer?.cancel();
+    }
   }
 
-  void _refresh() {
-    if (!mounted) return;
-    _refreshTimer?.cancel();
-    setState(() {
-      _dashboardFuture = _loadDashboard();
+  Future<DashboardSummary> _load() async {
+    _loading = true;
+    try {
+      final summary = await _repository.getDashboard();
+      if (mounted && summary.available) {
+        _cached = summary;
+        _scanScheduled = false;
+      }
+      return summary;
+    } finally {
+      _loading = false;
+      _scheduleRefresh();
+    }
+  }
+
+  void _scheduleRefresh() {
+    _timer?.cancel();
+    if (!mounted ||
+        !_repository.isAuthenticated ||
+        WidgetsBinding.instance.lifecycleState == AppLifecycleState.paused) {
+      return;
+    }
+    final syncing = const {
+      'PENDING',
+      'SYNCING',
+      'PARTIAL',
+    }.contains(_cached?.syncStatus);
+    _timer = Timer(Duration(seconds: syncing ? 10 : 30), () {
+      if (!mounted) return;
+      if (ModalRoute.of(context)?.isCurrent == true) {
+        _refresh();
+      } else {
+        _scheduleRefresh();
+      }
     });
   }
 
-  Future<DashboardSummary> _loadDashboard() async {
-    final dashboard = await senderWhoRepository.getDashboard();
-    if (dashboard.available) _cachedDashboard = dashboard;
-    _scheduleRefresh(dashboard.syncStatus);
-    return dashboard;
+  void _refresh() {
+    if (!mounted || _loading) return;
+    _timer?.cancel();
+    setState(() {
+      _future = _load();
+    });
   }
 
-  void _scheduleRefresh(String? syncStatus) {
-    _refreshTimer?.cancel();
-    if (!mounted || !senderWhoRepository.isAuthenticated) return;
-    final delay = syncStatus == 'PENDING' || syncStatus == 'SYNCING'
-        ? const Duration(seconds: 2)
-        : syncStatus == 'PARTIAL'
-        ? const Duration(seconds: 15)
-        : const Duration(seconds: 30);
-    _refreshTimer = Timer(delay, _refresh);
-  }
-
-  Future<void> _scanNow(DashboardSummary dashboard) async {
+  bool _canScan(DashboardSummary summary) =>
+      !_scanScheduled &&
+      summary.connectedAccountId?.isNotEmpty == true &&
+      summary.syncRetryAt == null &&
+      !const {
+        'PENDING',
+        'SYNCING',
+        'PARTIAL',
+        'DISCONNECTED',
+      }.contains(summary.syncStatus) &&
+      !const {
+        'RECONNECT',
+        'CONFIGURE_GOOGLE',
+        'CONTACT_ADMIN',
+      }.contains(summary.syncRecoveryAction);
+  Future<void> _scan(DashboardSummary summary) async {
+    if (_queueing || _loading || !_canScan(summary)) return;
     if (AppConfig.uiPreviewMode) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
@@ -91,1862 +131,570 @@ class _DashboardScreenState extends State<DashboardScreen>
       );
       return;
     }
-    final accountId = dashboard.connectedAccountId;
-    if (accountId == null || accountId.isEmpty || _queueingScan) return;
-    setState(() => _queueingScan = true);
-    final queued = await senderWhoRepository.queueAccountSync(accountId);
-    if (!mounted) return;
-    setState(() => _queueingScan = false);
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(
-          queued
-              ? 'A fresh email metadata scan has been queued.'
-              : 'The inbox scan could not be queued. Please try again.',
-        ),
-      ),
-    );
-    if (queued) _refresh();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return FutureBuilder<DashboardSummary>(
-      future: _dashboardFuture,
-      builder: (context, snapshot) {
-        final dashboard = snapshot.data?.available == true
-            ? snapshot.data
-            : _cachedDashboard;
-        final isRefreshing =
-            snapshot.connectionState == ConnectionState.waiting &&
-            dashboard != null;
-        final showingStale =
-            snapshot.data?.available == false && _cachedDashboard != null;
-
-        return AppPage(
-          maxContentWidth: 900,
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              _DashboardHeader(
-                dashboard: dashboard,
-                isRefreshing: isRefreshing,
-                onRefresh: _refresh,
-              ),
-              SizedBox(height: context.gap(18)),
-              if (isRefreshing)
-                const Padding(
-                  padding: EdgeInsets.only(bottom: 14),
-                  child: LinearProgressIndicator(
-                    minHeight: 2,
-                    borderRadius: BorderRadius.all(Radius.circular(99)),
-                  ),
-                ),
-              if (showingStale) ...[
-                _DashboardStaleNotice(onRetry: _refresh),
-                const SizedBox(height: 14),
-              ],
-              if (dashboard == null &&
-                  snapshot.connectionState == ConnectionState.waiting)
-                const _DashboardLoading()
-              else if (dashboard == null)
-                _DashboardUnavailable(onRetry: _refresh)
-              else
-                _DashboardContent(
-                  dashboard: dashboard,
-                  queueingScan: _queueingScan,
-                  onScan: () => _scanNow(dashboard),
-                ),
-            ],
-          ),
-        );
-      },
-    );
-  }
-}
-
-class _DashboardHeader extends StatelessWidget {
-  const _DashboardHeader({
-    required this.dashboard,
-    required this.isRefreshing,
-    required this.onRefresh,
-  });
-
-  final DashboardSummary? dashboard;
-  final bool isRefreshing;
-  final VoidCallback onRefresh;
-
-  @override
-  Widget build(BuildContext context) {
-    final connectedEmail = dashboard?.connectedEmail?.trim();
-    final subtitle = dashboard == null
-        ? 'Your inbox command center'
-        : connectedEmail == null || connectedEmail.isEmpty
-        ? _scanActionDetail(dashboard!)
-        : '$connectedEmail · ${_scanActionDetail(dashboard!)}';
-
-    return ConstrainedBox(
-      constraints: const BoxConstraints(minHeight: 54),
-      child: Stack(
-        alignment: Alignment.topCenter,
-        children: [
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 62),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Text(
-                  'Dashboard',
-                  key: const ValueKey('dashboard-header-title'),
-                  textAlign: TextAlign.center,
-                  style: Theme.of(context).textTheme.headlineSmall?.copyWith(
-                    fontSize: 21,
-                    fontWeight: FontWeight.w800,
-                    letterSpacing: -0.35,
-                  ),
-                ),
-                const SizedBox(height: 3),
-                Text(
-                  subtitle,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  textAlign: TextAlign.center,
-                  style: Theme.of(context).textTheme.labelMedium?.copyWith(
-                    color: AppColors.mutedFor(context),
-                    fontSize: 11.5,
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
-              ],
-            ),
-          ),
-          Align(
-            alignment: Alignment.topLeft,
-            child: _RoundIconButton(
-              tooltip: 'Open menu',
-              icon: Icons.menu_rounded,
-              onPressed: () => Scaffold.of(context).openDrawer(),
-            ),
-          ),
-          Align(
-            alignment: Alignment.topRight,
-            child: _RoundIconButton(
-              tooltip: 'Refresh live results',
-              icon: Icons.refresh_rounded,
-              onPressed: onRefresh,
-              spinning: isRefreshing,
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _DashboardContent extends StatelessWidget {
-  const _DashboardContent({
-    required this.dashboard,
-    required this.queueingScan,
-    required this.onScan,
-  });
-
-  final DashboardSummary dashboard;
-  final bool queueingScan;
-  final VoidCallback onScan;
-
-  @override
-  Widget build(BuildContext context) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        if (AppConfig.uiPreviewMode) ...[
-          const _PreviewModeNotice(),
-          SizedBox(height: context.gap(14)),
-        ],
-        _DashboardSearch(
-          onTap: () =>
-              Navigator.pushNamed(context, SearchFilterScreen.routeName),
-        ),
-        if (dashboard.syncStatus == 'PENDING' ||
-            dashboard.syncStatus == 'SYNCING' ||
-            dashboard.syncStatus == 'PARTIAL' ||
-            dashboard.syncStatus == 'FAILED' ||
-            dashboard.syncStatus == 'DISCONNECTED') ...[
-          SizedBox(height: context.gap(16)),
-          _SyncNotice(dashboard: dashboard, onRetry: onScan),
-        ],
-        SizedBox(height: context.gap(16)),
-        _HealthOverviewCard(summary: dashboard),
-        SizedBox(height: context.gap(24)),
-        const _SectionHeader(
-          title: 'Inbox overview',
-          caption: 'Live results from stored email metadata',
-        ),
-        const SizedBox(height: 14),
-        _MetricGrid(summary: dashboard),
-        SizedBox(height: context.gap(24)),
-        _CleanupOpportunityCard(summary: dashboard),
-        SizedBox(height: context.gap(24)),
-        const _SectionHeader(
-          title: 'Quick actions',
-          caption: 'Manage your inbox without leaving SenderWho',
-        ),
-        const SizedBox(height: 14),
-        _QuickActionGrid(
-          summary: dashboard,
-          queueingScan: queueingScan,
-          onScan: onScan,
-        ),
-        SizedBox(height: context.gap(24)),
-        _SectionHeader(
-          title: 'Top senders',
-          caption: 'Ranked by scanned message volume',
-          actionLabel: 'View all',
-          onAction: () =>
-              Navigator.pushNamed(context, AllSendersScreen.routeName),
-        ),
-        const SizedBox(height: 14),
-        _TopSendersCard(items: dashboard.topSenders),
-        SizedBox(height: context.gap(24)),
-        _SectionHeader(
-          title: 'Security alerts',
-          caption: dashboard.recentAlerts.isEmpty
-              ? 'Nothing currently needs your attention'
-              : '${dashboard.openAlertCount} alerts need review',
-          actionLabel: 'View all',
-          onAction: () =>
-              Navigator.pushNamed(context, SecurityAlertsScreen.routeName),
-        ),
-        const SizedBox(height: 14),
-        if (dashboard.recentAlerts.isEmpty)
-          const _SafeInboxCard()
-        else
-          for (final alert in dashboard.recentAlerts.take(3)) ...[
-            _AlertCard(alert: alert),
-            const SizedBox(height: 10),
-          ],
-      ],
-    );
-  }
-}
-
-class _PreviewModeNotice extends StatelessWidget {
-  const _PreviewModeNotice();
-
-  @override
-  Widget build(BuildContext context) {
-    final accent = AppColors.visualAccentFor(context, AppColors.indigo);
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
-      decoration: BoxDecoration(
-        color: AppColors.softFill(context, AppColors.indigo),
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: accent.withValues(alpha: 0.2)),
-      ),
-      child: Row(
-        children: [
-          const _SoftIcon(
-            icon: Icons.visibility_outlined,
-            color: AppColors.indigo,
-            size: 30,
-          ),
-          const SizedBox(width: 10),
-          Expanded(
-            child: Text(
-              'UI preview · Sample data · email actions are disabled',
-              style: Theme.of(context).textTheme.labelMedium?.copyWith(
-                color: AppColors.mutedFor(context),
-                fontSize: 10,
-                fontWeight: FontWeight.w600,
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _DashboardSearch extends StatelessWidget {
-  const _DashboardSearch({required this.onTap});
-
-  final VoidCallback onTap;
-
-  @override
-  Widget build(BuildContext context) {
-    final accent = AppColors.visualAccentFor(context, AppColors.primary);
-    return Material(
-      color: Colors.transparent,
-      child: InkWell(
-        onTap: onTap,
-        borderRadius: BorderRadius.circular(15),
-        child: Ink(
-          height: 50,
-          padding: const EdgeInsets.symmetric(horizontal: 15),
-          decoration: BoxDecoration(
-            color: AppColors.elevatedSurface(context),
-            borderRadius: BorderRadius.circular(15),
-            border: Border.all(
-              color: AppColors.borderFor(context).withValues(alpha: 0.82),
-            ),
-          ),
-          child: Row(
-            children: [
-              Icon(Icons.search_rounded, size: 21, color: accent),
-              const SizedBox(width: 12),
-              Expanded(
-                child: Text(
-                  'Search senders and email metadata',
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: Theme.of(
-                    context,
-                  ).textTheme.bodyMedium?.copyWith(fontSize: 13),
-                ),
-              ),
-              Container(
-                width: 34,
-                height: 34,
-                alignment: Alignment.center,
-                decoration: BoxDecoration(
-                  color: AppColors.softFill(context, AppColors.primary),
-                  borderRadius: BorderRadius.circular(11),
-                ),
-                child: Icon(Icons.tune_rounded, size: 17, color: accent),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-class _HealthOverviewCard extends StatelessWidget {
-  const _HealthOverviewCard({required this.summary});
-
-  final DashboardSummary summary;
-
-  @override
-  Widget build(BuildContext context) {
-    final onGradient = AppColors.onGradientFor(context);
-    final onGradientMuted = AppColors.onGradientMutedFor(context);
-    final success = AppColors.successFor(context);
-    final successVisual = AppColors.successVisualFor(context);
-    final action = AppColors.gradientActionFor(context);
-    return AppGradientCard(
-      padding: const EdgeInsets.all(18),
-      solidInDark: true,
-      onTap: () => Navigator.pushNamed(context, InboxHealthScreen.routeName),
-      child: Column(
-        children: [
-          Row(
-            crossAxisAlignment: CrossAxisAlignment.center,
-            children: [
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      'INBOX HEALTH',
-                      style: Theme.of(context).textTheme.labelMedium?.copyWith(
-                        color: onGradientMuted,
-                        fontWeight: FontWeight.w800,
-                        letterSpacing: 0.8,
-                      ),
-                    ),
-                    const SizedBox(height: 9),
-                    AppAnimatedCount(
-                      value: summary.inboxHealthScore,
-                      formatter: (value) => '$value%',
-                      style: Theme.of(context).textTheme.headlineLarge
-                          ?.copyWith(color: onGradient, letterSpacing: -0.7),
-                    ),
-                    const SizedBox(height: 6),
-                    Row(
-                      children: [
-                        _Dot(color: successVisual),
-                        const SizedBox(width: 7),
-                        Flexible(
-                          child: Text(
-                            summary.inboxHealthStatus,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: Theme.of(
-                              context,
-                            ).textTheme.labelLarge?.copyWith(color: success),
-                          ),
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 7),
-                    Text(
-                      summary.totalMessages == 0
-                          ? 'Results appear after the first scan.'
-                          : '${_formatCount(summary.totalMessages)} scanned messages',
-                      style: Theme.of(
-                        context,
-                      ).textTheme.bodySmall?.copyWith(color: onGradientMuted),
-                    ),
-                  ],
-                ),
-              ),
-              const SizedBox(width: 14),
-              _HealthRing(percent: summary.inboxHealthScore),
-            ],
-          ),
-          const SizedBox(height: 15),
-          Container(
-            height: 42,
-            decoration: BoxDecoration(
-              color: action.withValues(
-                alpha: AppColors.isDark(context) ? 0.12 : 0.075,
-              ),
-              borderRadius: BorderRadius.circular(13),
-              border: Border.all(
-                color: action.withValues(
-                  alpha: AppColors.isDark(context) ? 0.22 : 0.18,
-                ),
-              ),
-            ),
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                Text(
-                  'View details',
-                  style: Theme.of(context).textTheme.labelLarge?.copyWith(
-                    color: action,
-                    fontWeight: FontWeight.w800,
-                  ),
-                ),
-                const SizedBox(width: 7),
-                Icon(Icons.arrow_forward_rounded, size: 17, color: action),
-              ],
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _MetricGrid extends StatelessWidget {
-  const _MetricGrid({required this.summary});
-
-  final DashboardSummary summary;
-
-  @override
-  Widget build(BuildContext context) {
-    final items = [
-      _MetricData(
-        icon: Icons.people_alt_rounded,
-        value: summary.totalSenders,
-        label: 'Senders',
-        detail: 'Identified contacts',
-        color: AppColors.primary,
-        route: AllSendersScreen.routeName,
-      ),
-      _MetricData(
-        icon: Icons.mark_email_unread_rounded,
-        value: summary.unreadEmails,
-        label: 'Unread',
-        detail: 'Need your attention',
-        color: AppColors.indigo,
-        route: EmailsScreen.routeName,
-        arguments: const EmailListArguments(
-          mailbox: 'UNREAD',
-          title: 'Unread Emails',
-        ),
-      ),
-      _MetricData(
-        icon: Icons.local_offer_rounded,
-        value: summary.promotions,
-        label: 'Promotions',
-        detail: 'Marketing messages',
-        color: AppColors.success,
-        route: EmailsScreen.routeName,
-        arguments: const EmailListArguments(
-          mailbox: 'ALL',
-          category: 'PROMOTIONS',
-          title: 'Promotions',
-        ),
-      ),
-      _MetricData(
-        icon: Icons.gpp_maybe_rounded,
-        value: summary.spam,
-        label: 'Spam',
-        detail: 'Flagged as junk',
-        color: AppColors.danger,
-        route: EmailsScreen.routeName,
-        arguments: const EmailListArguments(
-          mailbox: 'ALL',
-          category: 'SPAM',
-          title: 'Spam / Junk',
-        ),
-      ),
-    ];
-
-    return LayoutBuilder(
-      builder: (context, constraints) {
-        final columns = constraints.maxWidth >= 520 ? 4 : 2;
-        final gap = constraints.maxWidth < 340 ? 10.0 : 12.0;
-        final width = (constraints.maxWidth - (gap * (columns - 1))) / columns;
-        return Wrap(
-          spacing: gap,
-          runSpacing: gap,
-          children: [
-            for (final item in items)
-              SizedBox(
-                width: width,
-                child: _MetricCard(data: item),
-              ),
-          ],
-        );
-      },
-    );
-  }
-}
-
-class _MetricCard extends StatelessWidget {
-  const _MetricCard({required this.data});
-
-  final _MetricData data;
-
-  @override
-  Widget build(BuildContext context) {
-    return Material(
-      color: Colors.transparent,
-      child: InkWell(
-        onTap: () =>
-            Navigator.pushNamed(context, data.route, arguments: data.arguments),
-        borderRadius: BorderRadius.circular(16),
-        child: Ink(
-          padding: const EdgeInsets.all(14),
-          decoration: BoxDecoration(
-            gradient: LinearGradient(
-              begin: Alignment.topLeft,
-              end: Alignment.bottomRight,
-              colors: AppColors.tonalGradientFor(context, data.color),
-            ),
-            borderRadius: BorderRadius.circular(16),
-            border: Border.all(
-              color: AppColors.tonalBorderFor(context, data.color),
-            ),
-          ),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Row(
-                children: [
-                  _SoftIcon(icon: data.icon, color: data.color, size: 34),
-                  const Spacer(),
-                  Icon(
-                    Icons.arrow_outward_rounded,
-                    size: 16,
-                    color: AppColors.mutedFor(context),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 10),
-              AppAnimatedCount(
-                value: data.value,
-                formatter: _formatCount,
-                style: Theme.of(context).textTheme.titleLarge?.copyWith(
-                  fontSize: 21,
-                  fontWeight: FontWeight.w800,
-                  letterSpacing: -0.4,
-                ),
-              ),
-              const SizedBox(height: 3),
-              Text(
-                data.label,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: Theme.of(context).textTheme.bodyLarge?.copyWith(
-                  fontSize: 13,
-                  fontWeight: FontWeight.w700,
-                ),
-              ),
-              const SizedBox(height: 3),
-              Text(
-                data.detail,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                  fontSize: 11.5,
-                  fontWeight: FontWeight.w500,
-                ),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-class _CleanupOpportunityCard extends StatelessWidget {
-  const _CleanupOpportunityCard({required this.summary});
-
-  final DashboardSummary summary;
-
-  @override
-  Widget build(BuildContext context) {
-    final hasOpportunity = summary.cleanupMessages > 0;
-    final isDark = AppColors.isDark(context);
-    return Container(
-      padding: const EdgeInsets.all(18),
-      decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(18),
-        color: isDark ? AppColors.darkElevatedCard : null,
-        gradient: isDark
-            ? null
-            : LinearGradient(
-                begin: Alignment.topLeft,
-                end: Alignment.bottomRight,
-                colors: AppColors.tonalGradientFor(
-                  context,
-                  AppColors.indigo,
-                  elevated: true,
-                  intensity: 1.15,
-                ),
-              ),
-        border: Border.all(
-          color: isDark
-              ? AppColors.darkBorder.withValues(alpha: 0.9)
-              : AppColors.tonalBorderFor(context, AppColors.indigo),
-        ),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              const _SoftIcon(
-                icon: Icons.auto_awesome_rounded,
-                color: AppColors.primary,
-                size: 40,
-              ),
-              const SizedBox(width: 14),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      'Smart cleanup',
-                      style: Theme.of(context).textTheme.titleLarge?.copyWith(
-                        fontSize: 15,
-                        fontWeight: FontWeight.w800,
-                      ),
-                    ),
-                    const SizedBox(height: 6),
-                    Text(
-                      hasOpportunity
-                          ? '${_formatCount(summary.cleanupMessages)} emails are ready for review.'
-                          : 'No cleanup suggestions are available right now.',
-                      style: Theme.of(
-                        context,
-                      ).textTheme.bodyMedium?.copyWith(height: 1.4),
-                    ),
-                  ],
-                ),
-              ),
-            ],
-          ),
-          if (hasOpportunity) ...[
-            const SizedBox(height: 14),
-            Row(
-              children: [
-                _OpportunityStat(
-                  label: 'Potential space',
-                  value: _formatBytes(summary.estimatedSpaceBytes),
-                ),
-                const SizedBox(width: 10),
-                _OpportunityStat(
-                  label: 'Can unsubscribe',
-                  value: _formatCount(summary.unsubscribeSenders),
-                ),
-              ],
-            ),
-          ],
-          const SizedBox(height: 14),
-          SizedBox(
-            width: double.infinity,
-            height: 42,
-            child: FilledButton.icon(
-              onPressed: () =>
-                  Navigator.pushNamed(context, BulkCleanScreen.routeName),
-              icon: const Icon(Icons.cleaning_services_rounded, size: 17),
-              label: Text(hasOpportunity ? 'Review cleanup' : 'Open cleanup'),
-              style: FilledButton.styleFrom(
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(12),
-                ),
-                textStyle: const TextStyle(
-                  fontSize: 11,
-                  fontWeight: FontWeight.w800,
-                ),
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _QuickActionGrid extends StatelessWidget {
-  const _QuickActionGrid({
-    required this.summary,
-    required this.queueingScan,
-    required this.onScan,
-  });
-
-  final DashboardSummary summary;
-  final bool queueingScan;
-  final VoidCallback onScan;
-
-  @override
-  Widget build(BuildContext context) {
-    final actions = [
-      _ActionData(
-        icon: Icons.people_alt_outlined,
-        title: 'All senders',
-        detail: '${_formatCount(summary.totalSenders)} identified',
-        color: AppColors.primary,
-        onTap: () => Navigator.pushNamed(context, AllSendersScreen.routeName),
-      ),
-      _ActionData(
-        icon: Icons.cleaning_services_outlined,
-        title: 'Bulk clean',
-        detail: '${_formatCount(summary.cleanupMessages)} suggested',
-        color: AppColors.success,
-        onTap: () => Navigator.pushNamed(context, BulkCleanScreen.routeName),
-      ),
-      _ActionData(
-        icon: Icons.unsubscribe_rounded,
-        title: 'Unsubscribe',
-        detail: '${_formatCount(summary.unsubscribeSenders)} available',
-        color: AppColors.indigo,
-        onTap: () => Navigator.pushNamed(context, UnsubscribeScreen.routeName),
-      ),
-      _ActionData(
-        icon: queueingScan ? Icons.sync_rounded : Icons.cloud_sync_outlined,
-        title: queueingScan ? 'Queueing…' : 'Scan inbox',
-        detail: _scanActionDetail(summary),
-        color: AppColors.info,
-        onTap:
-            summary.connectedAccountId == null ||
-                queueingScan ||
-                summary.syncRecoveryAction == 'RECONNECT' ||
-                summary.syncRecoveryAction == 'CONFIGURE_GOOGLE'
-            ? null
-            : onScan,
-      ),
-    ];
-
-    return LayoutBuilder(
-      builder: (context, constraints) {
-        final gap = constraints.maxWidth < 340 ? 10.0 : 12.0;
-        final width = (constraints.maxWidth - gap) / 2;
-        return Wrap(
-          spacing: gap,
-          runSpacing: gap,
-          children: [
-            for (final action in actions)
-              SizedBox(
-                width: width,
-                child: _QuickActionCard(action: action),
-              ),
-          ],
-        );
-      },
-    );
-  }
-}
-
-class _QuickActionCard extends StatelessWidget {
-  const _QuickActionCard({required this.action});
-
-  final _ActionData action;
-
-  @override
-  Widget build(BuildContext context) {
-    final isDark = AppColors.isDark(context);
-    return Material(
-      color: Colors.transparent,
-      child: InkWell(
-        onTap: action.onTap,
-        borderRadius: BorderRadius.circular(15),
-        child: Ink(
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 13),
-          decoration: BoxDecoration(
-            color: isDark ? AppColors.darkElevatedCard : null,
-            gradient: isDark
-                ? null
-                : LinearGradient(
-                    begin: Alignment.topLeft,
-                    end: Alignment.bottomRight,
-                    colors: AppColors.tonalGradientFor(
-                      context,
-                      action.color,
-                      elevated: true,
-                      intensity: 0.9,
-                    ),
-                  ),
-            borderRadius: BorderRadius.circular(15),
-            border: Border.all(
-              color: isDark
-                  ? AppColors.darkBorder.withValues(alpha: 0.9)
-                  : AppColors.tonalBorderFor(
-                      context,
-                      action.color,
-                      intensity: 0.9,
-                    ),
-            ),
-          ),
-          child: Row(
-            children: [
-              _SoftIcon(icon: action.icon, color: action.color, size: 34),
-              const SizedBox(width: 10),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      action.title,
-                      maxLines: 2,
-                      overflow: TextOverflow.fade,
-                      style: Theme.of(context).textTheme.bodyLarge?.copyWith(
-                        fontSize: 12.5,
-                        fontWeight: FontWeight.w800,
-                      ),
-                    ),
-                    const SizedBox(height: 4),
-                    Text(
-                      action.detail,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                        fontSize: 11.5,
-                        fontWeight: FontWeight.w500,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-class _TopSendersCard extends StatelessWidget {
-  const _TopSendersCard({required this.items});
-
-  final List<TopSenderItem> items;
-
-  @override
-  Widget build(BuildContext context) {
-    if (items.isEmpty) {
-      return const _EmptyDashboardCard(
-        icon: Icons.people_outline_rounded,
-        title: 'No sender rankings yet',
-        body: 'Top senders appear after email metadata is scanned.',
+    setState(() => _queueing = true);
+    try {
+      final queued = await _repository.queueAccountSync(
+        summary.connectedAccountId!,
       );
-    }
-
-    return Container(
-      decoration: _surfaceDecoration(context, radius: 20),
-      child: Column(
-        children: [
-          for (var index = 0; index < items.length; index++) ...[
-            _TopSenderRow(
-              item: items[index],
-              color: const [
-                AppColors.info,
-                AppColors.indigo,
-                AppColors.success,
-              ][index % 3],
-            ),
-            if (index != items.length - 1)
-              Divider(
-                height: 1,
-                indent: 62,
-                color: AppColors.borderFor(context).withValues(alpha: 0.7),
-              ),
-          ],
-        ],
-      ),
-    );
-  }
-}
-
-class _TopSenderRow extends StatelessWidget {
-  const _TopSenderRow({required this.item, required this.color});
-
-  final TopSenderItem item;
-  final Color color;
-
-  @override
-  Widget build(BuildContext context) {
-    final initial = item.name.trim().isEmpty
-        ? '?'
-        : item.name.trim()[0].toUpperCase();
-    return InkWell(
-      onTap: item.id.isEmpty
-          ? null
-          : () => Navigator.pushNamed(
-              context,
-              SenderDetailsScreen.routeName,
-              arguments: item.id,
-            ),
-      borderRadius: BorderRadius.circular(18),
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 13),
-        child: Row(
-          children: [
-            Container(
-              width: 36,
-              height: 36,
-              alignment: Alignment.center,
-              decoration: BoxDecoration(
-                color: AppColors.softFill(context, color),
-                borderRadius: BorderRadius.circular(12),
-              ),
-              child: Text(
-                initial,
-                style: TextStyle(
-                  color: AppColors.visualAccentFor(context, color),
-                  fontSize: 13,
-                  fontWeight: FontWeight.w800,
-                ),
-              ),
-            ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    item.name,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: Theme.of(context).textTheme.bodyLarge?.copyWith(
-                      fontSize: 11,
-                      fontWeight: FontWeight.w800,
-                    ),
-                  ),
-                  const SizedBox(height: 4),
-                  Text(
-                    item.email,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                      fontWeight: FontWeight.w500,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-            const SizedBox(width: 10),
-            Column(
-              crossAxisAlignment: CrossAxisAlignment.end,
-              children: [
-                Text(
-                  _formatCount(item.count),
-                  style: Theme.of(context).textTheme.bodyLarge?.copyWith(
-                    fontSize: 11,
-                    fontWeight: FontWeight.w800,
-                  ),
-                ),
-                const SizedBox(height: 3),
-                Text(
-                  'messages',
-                  style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                    fontSize: 9,
-                    fontWeight: FontWeight.w500,
-                  ),
-                ),
-              ],
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-class _AlertCard extends StatelessWidget {
-  const _AlertCard({required this.alert});
-
-  final AlertItem alert;
-
-  @override
-  Widget build(BuildContext context) {
-    return Material(
-      color: Colors.transparent,
-      child: InkWell(
-        onTap: () =>
-            Navigator.pushNamed(context, '/alert-details', arguments: alert),
-        borderRadius: BorderRadius.circular(18),
-        child: Ink(
-          padding: const EdgeInsets.all(16),
-          decoration: _surfaceDecoration(
-            context,
-            radius: 18,
-            tint: alert.color,
-          ),
-          child: Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              _SoftIcon(
-                icon: Icons.shield_outlined,
-                color: alert.color,
-                size: 42,
-              ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Row(
-                      children: [
-                        Expanded(
-                          child: Text(
-                            alert.title,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: Theme.of(context).textTheme.bodyLarge
-                                ?.copyWith(
-                                  fontSize: 13,
-                                  fontWeight: FontWeight.w800,
-                                ),
-                          ),
-                        ),
-                        const SizedBox(width: 8),
-                        _RiskPill(label: alert.risk, color: alert.color),
-                      ],
-                    ),
-                    const SizedBox(height: 6),
-                    Text(
-                      alert.reason,
-                      maxLines: 2,
-                      overflow: TextOverflow.ellipsis,
-                      style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                        fontSize: 12,
-                        height: 1.35,
-                      ),
-                    ),
-                    const SizedBox(height: 7),
-                    Text(
-                      '${alert.email} • ${_relativeFromValue(alert.time)}',
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                        fontSize: 9,
-                        fontWeight: FontWeight.w500,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ],
+      if (!mounted) return;
+      if (queued) _scanScheduled = true;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            queued
+                ? 'Mailbox sync scheduled.'
+                : _repository.lastError ??
+                      'Couldn’t start the sync. Please try again later.',
           ),
         ),
-      ),
-    );
-  }
-}
-
-class _SyncNotice extends StatelessWidget {
-  const _SyncNotice({required this.dashboard, required this.onRetry});
-
-  final DashboardSummary dashboard;
-  final VoidCallback onRetry;
-
-  @override
-  Widget build(BuildContext context) {
-    final recovery = dashboard.syncRecoveryAction;
-    final needsConnection =
-        recovery == 'RECONNECT' || recovery == 'CONFIGURE_GOOGLE';
-    final failed =
-        dashboard.syncStatus == 'FAILED' ||
-        dashboard.syncStatus == 'DISCONNECTED';
-    final backfilling = dashboard.syncStatus == 'PARTIAL';
-    final baseColor = failed
-        ? AppColors.danger
-        : backfilling
-        ? AppColors.success
-        : AppColors.primary;
-    final color = AppColors.foregroundFor(context, baseColor);
-    final actionLabel = switch (recovery) {
-      'RECONNECT' => 'Reconnect',
-      'CONFIGURE_GOOGLE' => 'Details',
-      _ => 'Retry',
-    };
-    void handleAction() {
-      if (recovery == 'RECONNECT') {
-        Navigator.pushNamed(context, ConnectEmailScreen.routeName);
-      } else if (recovery == 'CONFIGURE_GOOGLE') {
-        Navigator.pushNamed(context, ConnectedAccountsScreen.routeName);
-      } else {
-        onRetry();
+      );
+      if (queued) {
+        _refresh();
+        await _future;
       }
+    } finally {
+      if (mounted) setState(() => _queueing = false);
     }
-
-    return Container(
-      padding: const EdgeInsets.all(15),
-      decoration: BoxDecoration(
-        color: AppColors.softFill(context, color),
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: color.withValues(alpha: 0.25)),
-      ),
-      child: Row(
-        children: [
-          _SoftIcon(
-            icon: failed
-                ? Icons.error_outline_rounded
-                : backfilling
-                ? Icons.check_circle_outline_rounded
-                : Icons.sync_rounded,
-            color: color,
-          ),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  failed
-                      ? needsConnection
-                            ? 'Email connection needs attention'
-                            : 'Inbox scan needs attention'
-                      : backfilling
-                      ? 'Recent email is ready'
-                      : 'Inbox scan in progress',
-                  style: Theme.of(context).textTheme.bodyLarge?.copyWith(
-                    fontSize: 11,
-                    fontWeight: FontWeight.w800,
-                  ),
-                ),
-                const SizedBox(height: 4),
-                Text(
-                  failed
-                      ? dashboard.syncError ?? 'Retry the metadata scan.'
-                      : backfilling
-                      ? 'You can use SenderWho now. Older mail continues importing safely in the background.'
-                      : 'Recent mail is being prepared. This should only take a short moment.',
-                  maxLines: 2,
-                  overflow: TextOverflow.ellipsis,
-                  style: Theme.of(
-                    context,
-                  ).textTheme.bodyMedium?.copyWith(fontSize: 11, height: 1.35),
-                ),
-              ],
-            ),
-          ),
-          if (failed)
-            TextButton(onPressed: handleAction, child: Text(actionLabel))
-          else if (!backfilling)
-            SizedBox(
-              width: 18,
-              height: 18,
-              child: CircularProgressIndicator(strokeWidth: 2, color: color),
-            ),
-        ],
-      ),
-    );
   }
-}
-
-class _SafeInboxCard extends StatelessWidget {
-  const _SafeInboxCard();
 
   @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.all(18),
-      decoration: _surfaceDecoration(
-        context,
-        radius: 18,
-        tint: AppColors.success,
-      ),
-      child: Row(
-        children: [
-          const _SoftIcon(
-            icon: Icons.verified_user_rounded,
-            color: AppColors.success,
-            size: 44,
-          ),
-          const SizedBox(width: 13),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  'No open security alerts',
-                  style: Theme.of(context).textTheme.bodyLarge?.copyWith(
-                    fontSize: 11,
-                    fontWeight: FontWeight.w800,
-                  ),
-                ),
-                const SizedBox(height: 5),
-                Text(
-                  'SenderWho has not found anything that currently needs review.',
-                  style: Theme.of(
-                    context,
-                  ).textTheme.bodyMedium?.copyWith(fontSize: 10, height: 1.35),
-                ),
-              ],
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _DashboardLoading extends StatelessWidget {
-  const _DashboardLoading();
-
-  @override
-  Widget build(BuildContext context) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        const _SkeletonBox(height: 52, radius: 16),
-        SizedBox(height: context.gap(20)),
-        Container(
-          height: 238,
-          padding: const EdgeInsets.all(22),
-          decoration: BoxDecoration(
-            color: AppColors.surface(context),
-            borderRadius: BorderRadius.circular(24),
-            border: Border.all(color: AppColors.borderFor(context)),
-          ),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
+  Widget build(BuildContext context) => FutureBuilder<DashboardSummary>(
+    future: _future,
+    builder: (context, snapshot) {
+      final summary = snapshot.data?.available == true
+          ? snapshot.data
+          : _cached;
+      final stale = snapshot.hasError || snapshot.data?.available == false;
+      return AppPage(
+        maxContentWidth: 840,
+        onRefresh: () async {
+          if (!_loading) _refresh();
+          await _future;
+        },
+        header: AppHeader(
+          title: 'Dashboard',
+          action: Row(
+            mainAxisSize: MainAxisSize.min,
             children: [
-              Text(
-                'INBOX HEALTH',
-                style: TextStyle(
-                  color: AppColors.mutedFor(context),
-                  fontSize: 10,
-                  fontWeight: FontWeight.w800,
-                  letterSpacing: 1.2,
-                ),
+              IconButton(
+                tooltip: 'Search senders and messages',
+                onPressed: () =>
+                    Navigator.pushNamed(context, SearchFilterScreen.routeName),
+                icon: const Icon(Icons.search_rounded),
               ),
-              const Spacer(),
-              const Center(child: CircularProgressIndicator()),
-              const SizedBox(height: 16),
-              Center(
-                child: Text(
-                  'Loading live email insights…',
-                  style: Theme.of(context).textTheme.bodySmall,
-                ),
-              ),
-              const Spacer(),
-            ],
-          ),
-        ),
-        SizedBox(height: context.gap(28)),
-        const _SkeletonBox(height: 18, width: 132),
-        const SizedBox(height: 14),
-        const Row(
-          children: [
-            Expanded(child: _SkeletonBox(height: 128, radius: 18)),
-            SizedBox(width: 12),
-            Expanded(child: _SkeletonBox(height: 128, radius: 18)),
-          ],
-        ),
-      ],
-    );
-  }
-}
-
-class _DashboardUnavailable extends StatelessWidget {
-  const _DashboardUnavailable({required this.onRetry});
-
-  final VoidCallback onRetry;
-
-  @override
-  Widget build(BuildContext context) {
-    return Column(
-      children: [
-        Container(
-          width: double.infinity,
-          padding: const EdgeInsets.all(24),
-          decoration: _surfaceDecoration(
-            context,
-            radius: 22,
-            tint: AppColors.danger,
-          ),
-          child: Column(
-            children: [
-              const _SoftIcon(
-                icon: Icons.cloud_off_rounded,
-                color: AppColors.danger,
-                size: 52,
-              ),
-              const SizedBox(height: 16),
-              Text(
-                'INBOX HEALTH',
-                style: TextStyle(
-                  color: AppColors.mutedFor(context),
-                  fontSize: 10,
-                  fontWeight: FontWeight.w800,
-                  letterSpacing: 1.2,
-                ),
-              ),
-              const SizedBox(height: 8),
-              Text(
-                'Live dashboard unavailable',
-                textAlign: TextAlign.center,
-                style: Theme.of(context).textTheme.titleLarge?.copyWith(
-                  fontSize: 17,
-                  fontWeight: FontWeight.w800,
-                ),
-              ),
-              const SizedBox(height: 8),
-              Text(
-                'SenderWho could not load authenticated email results. Check the API connection or sign in again.',
-                textAlign: TextAlign.center,
-                style: Theme.of(
-                  context,
-                ).textTheme.bodyMedium?.copyWith(height: 1.45),
-              ),
-              const SizedBox(height: 18),
-              SizedBox(
-                width: double.infinity,
-                height: 43,
-                child: FilledButton.icon(
-                  onPressed: onRetry,
-                  icon: const Icon(Icons.refresh_rounded, size: 18),
-                  label: const Text('Try again'),
-                  style: FilledButton.styleFrom(
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(12),
-                    ),
-                  ),
-                ),
+              IconButton(
+                tooltip: 'Refresh live results',
+                onPressed: _loading ? null : _refresh,
+                icon: const Icon(Icons.refresh_rounded),
               ),
             ],
-          ),
-        ),
-      ],
-    );
-  }
-}
-
-class _DashboardStaleNotice extends StatelessWidget {
-  const _DashboardStaleNotice({required this.onRetry});
-
-  final VoidCallback onRetry;
-
-  @override
-  Widget build(BuildContext context) {
-    final accent = AppColors.visualAccentFor(context, AppColors.warning);
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-      decoration: BoxDecoration(
-        color: AppColors.softFill(context, AppColors.warning),
-        borderRadius: BorderRadius.circular(15),
-        border: Border.all(color: accent.withValues(alpha: 0.25)),
-      ),
-      child: Row(
-        children: [
-          Icon(Icons.cloud_off_outlined, size: 19, color: accent),
-          const SizedBox(width: 10),
-          const Expanded(
-            child: Text('Showing saved results. Live refresh is unavailable.'),
-          ),
-          TextButton(onPressed: onRetry, child: const Text('Retry')),
-        ],
-      ),
-    );
-  }
-}
-
-class _EmptyDashboardCard extends StatelessWidget {
-  const _EmptyDashboardCard({
-    required this.icon,
-    required this.title,
-    required this.body,
-  });
-
-  final IconData icon;
-  final String title;
-  final String body;
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.all(18),
-      decoration: _surfaceDecoration(context, radius: 18),
-      child: Row(
-        children: [
-          _SoftIcon(icon: icon, color: AppColors.primary, size: 44),
-          const SizedBox(width: 13),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  title,
-                  style: Theme.of(context).textTheme.bodyLarge?.copyWith(
-                    fontSize: 11,
-                    fontWeight: FontWeight.w800,
-                  ),
-                ),
-                const SizedBox(height: 5),
-                Text(
-                  body,
-                  style: Theme.of(
-                    context,
-                  ).textTheme.bodyMedium?.copyWith(fontSize: 10, height: 1.35),
-                ),
-              ],
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _SectionHeader extends StatelessWidget {
-  const _SectionHeader({
-    required this.title,
-    required this.caption,
-    this.actionLabel,
-    this.onAction,
-  });
-
-  final String title;
-  final String caption;
-  final String? actionLabel;
-  final VoidCallback? onAction;
-
-  @override
-  Widget build(BuildContext context) {
-    return Row(
-      crossAxisAlignment: CrossAxisAlignment.end,
-      children: [
-        Expanded(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                title,
-                style: Theme.of(context).textTheme.titleLarge?.copyWith(
-                  fontSize: 18,
-                  fontWeight: FontWeight.w800,
-                  letterSpacing: -0.25,
-                ),
-              ),
-              const SizedBox(height: 4),
-              Text(
-                caption,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                  fontSize: 12,
-                  fontWeight: FontWeight.w500,
-                ),
-              ),
-            ],
-          ),
-        ),
-        if (actionLabel != null)
-          TextButton(
-            onPressed: onAction,
-            style: TextButton.styleFrom(
-              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
-              minimumSize: Size.zero,
-              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-            ),
-            child: Text(
-              actionLabel!,
-              style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w800),
-            ),
-          ),
-      ],
-    );
-  }
-}
-
-class _HealthRing extends StatelessWidget {
-  const _HealthRing({required this.percent});
-
-  final int percent;
-
-  @override
-  Widget build(BuildContext context) {
-    final onGradient = AppColors.onGradientFor(context);
-    final onGradientMuted = AppColors.onGradientMutedFor(context);
-    final ringColor = AppColors.visualAccentFor(context, AppColors.primary);
-    final ringEnd = AppColors.visualAccentFor(
-      context,
-      AppColors.isDark(context) ? AppColors.info : AppColors.indigo,
-    );
-    return AppAnimatedProgressRing(
-      value: percent / 100,
-      size: 78,
-      strokeWidth: 7,
-      backgroundColor: ringColor.withValues(alpha: 0.16),
-      color: ringColor,
-      gradient: LinearGradient(
-        begin: Alignment.topLeft,
-        end: Alignment.bottomRight,
-        colors: [ringColor, ringEnd],
-      ),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Text(
-            '$percent',
-            style: Theme.of(context).textTheme.titleLarge?.copyWith(
-              color: onGradient,
-              fontWeight: FontWeight.w800,
-              height: 1,
-            ),
-          ),
-          const SizedBox(height: 3),
-          Text(
-            'SCORE',
-            style: Theme.of(context).textTheme.labelSmall?.copyWith(
-              color: onGradientMuted,
-              fontSize: 9,
-              fontWeight: FontWeight.w700,
-              letterSpacing: 0.7,
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _RoundIconButton extends StatelessWidget {
-  const _RoundIconButton({
-    required this.tooltip,
-    required this.icon,
-    required this.onPressed,
-    this.spinning = false,
-  });
-
-  final String tooltip;
-  final IconData icon;
-  final VoidCallback onPressed;
-  final bool spinning;
-
-  @override
-  Widget build(BuildContext context) {
-    return Tooltip(
-      message: tooltip,
-      child: Material(
-        color: AppColors.elevatedSurface(context),
-        borderRadius: BorderRadius.circular(15),
-        child: InkWell(
-          onTap: onPressed,
-          borderRadius: BorderRadius.circular(15),
-          child: Container(
-            width: 46,
-            height: 46,
-            alignment: Alignment.center,
-            decoration: BoxDecoration(
-              borderRadius: BorderRadius.circular(15),
-              border: Border.all(
-                color: AppColors.borderFor(context).withValues(alpha: 0.55),
-              ),
-              boxShadow: [
-                BoxShadow(
-                  color: AppColors.shadowFor(context),
-                  blurRadius: 12,
-                  offset: const Offset(0, 4),
-                ),
-              ],
-            ),
-            child: TweenAnimationBuilder<double>(
-              tween: Tween(end: spinning ? 1 : 0),
-              duration: MediaQuery.disableAnimationsOf(context)
-                  ? Duration.zero
-                  : const Duration(milliseconds: 700),
-              curve: Curves.easeInOutCubic,
-              builder: (context, value, child) =>
-                  Transform.rotate(angle: value * 6.283, child: child),
-              child: Icon(icon, size: 20),
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-class _SoftIcon extends StatelessWidget {
-  const _SoftIcon({required this.icon, required this.color, this.size = 38});
-
-  final IconData icon;
-  final Color color;
-  final double size;
-
-  @override
-  Widget build(BuildContext context) {
-    final resolvedColor = AppColors.visualAccentFor(context, color);
-    return Container(
-      width: size,
-      height: size,
-      alignment: Alignment.center,
-      decoration: BoxDecoration(
-        color: AppColors.softFill(context, color),
-        borderRadius: BorderRadius.circular(size * 0.32),
-        border: Border.all(color: resolvedColor.withValues(alpha: 0.16)),
-      ),
-      child: Icon(icon, color: resolvedColor, size: size * 0.5),
-    );
-  }
-}
-
-class _OpportunityStat extends StatelessWidget {
-  const _OpportunityStat({required this.label, required this.value});
-
-  final String label;
-  final String value;
-
-  @override
-  Widget build(BuildContext context) {
-    return Expanded(
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 13, vertical: 11),
-        decoration: BoxDecoration(
-          color: AppColors.surface(context).withValues(alpha: 0.7),
-          borderRadius: BorderRadius.circular(13),
-          border: Border.all(
-            color: AppColors.borderFor(context).withValues(alpha: 0.58),
           ),
         ),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text(
-              value,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: Theme.of(context).textTheme.bodyLarge?.copyWith(
-                fontSize: 12,
-                fontWeight: FontWeight.w800,
+            const SizedBox(height: 12),
+            if (summary == null)
+              snapshot.connectionState == ConnectionState.waiting
+                  ? const AppAsyncLoading(
+                      message: 'Loading your mailbox overview…',
+                    )
+                  : AppAsyncError(
+                      title: 'Overview unavailable',
+                      message: 'Your mailbox overview could not be refreshed.',
+                      onRetry: _refresh,
+                    )
+            else ...[
+              if (AppConfig.uiPreviewMode)
+                const Padding(
+                  padding: EdgeInsets.only(bottom: 12),
+                  child: Text(
+                    'UI preview · Sample data · email actions are disabled',
+                  ),
+                ),
+              if (stale)
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 12),
+                  child: _OverviewRow(
+                    icon: Icons.cloud_off_outlined,
+                    title: 'Showing the last update',
+                    subtitle: 'Pull to refresh when you’re connected.',
+                    onTap: _refresh,
+                  ),
+                ),
+              MailboxSyncNotice(
+                summary: summary,
+                account: _repository.activeMailbox.value,
+              ),
+              _MailboxOverview(summary: summary),
+              if (const {
+                'PENDING',
+                'SYNCING',
+                'PARTIAL',
+              }.contains(summary.syncStatus))
+                Padding(
+                  padding: const EdgeInsets.only(top: 10),
+                  child: Row(
+                    children: [
+                      Icon(
+                        Icons.sync_rounded,
+                        size: 16,
+                        color: Theme.of(context).colorScheme.onSurfaceVariant,
+                      ),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          summary.totalMessages > 0
+                              ? 'Older mail is syncing. You can keep using your inbox.'
+                              : 'Preparing your mailbox. Results appear automatically.',
+                          style: Theme.of(context).textTheme.bodySmall,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              const SizedBox(height: 24),
+              const _SectionHeading(title: 'Manage your inbox'),
+              const SizedBox(height: 10),
+              _OverviewPanel(
+                child: Column(
+                  children: [
+                    _OverviewRow(
+                      key: const ValueKey('dashboard-cleanup'),
+                      icon: Icons.cleaning_services_outlined,
+                      title: 'Bulk clean',
+                      subtitle: summary.cleanupMessages > 0
+                          ? '${_number(summary.cleanupMessages)} emails to review · ${_bytes(summary.estimatedSpaceBytes)}'
+                          : 'Review emails before moving them to Trash',
+                      onTap: () => AppNavigation.open(
+                        context,
+                        BulkCleanScreen.routeName,
+                      ),
+                    ),
+                    const Divider(height: 1),
+                    _OverviewRow(
+                      key: const ValueKey('dashboard-unsubscribe'),
+                      icon: Icons.unsubscribe_outlined,
+                      title: 'Unsubscribe',
+                      subtitle:
+                          '${_number(summary.unsubscribeSenders)} subscriptions available',
+                      onTap: () => AppNavigation.open(
+                        context,
+                        UnsubscribeScreen.routeName,
+                      ),
+                    ),
+                    const Divider(height: 1),
+                    _OverviewRow(
+                      key: const ValueKey('dashboard-health'),
+                      icon: Icons.health_and_safety_outlined,
+                      title: 'Inbox health',
+                      subtitle: summary.totalMessages == 0
+                          ? 'Available after your first scan'
+                          : summary.inboxHealthStatus,
+                      value: '${summary.inboxHealthScore}%',
+                      onTap: () => Navigator.pushNamed(
+                        context,
+                        InboxHealthScreen.routeName,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 24),
+              _SectionHeading(
+                title: 'Top senders',
+                action: TextButton(
+                  onPressed: () =>
+                      AppNavigation.open(context, AllSendersScreen.routeName),
+                  child: const Text('View all'),
+                ),
+              ),
+              if (summary.topSenders.isEmpty)
+                const Padding(
+                  padding: EdgeInsets.symmetric(vertical: 12),
+                  child: Text('Your most active senders appear after a scan.'),
+                )
+              else
+                _OverviewPanel(
+                  child: Column(
+                    children: [
+                      for (
+                        var i = 0;
+                        i < summary.topSenders.take(3).length;
+                        i++
+                      ) ...[
+                        _OverviewRow(
+                          key: ValueKey(
+                            'dashboard-sender-${summary.topSenders[i].id}',
+                          ),
+                          leading: MailAvatar(
+                            name: summary.topSenders[i].name,
+                            size: 34,
+                          ),
+                          title: summary.topSenders[i].name,
+                          subtitle: summary.topSenders[i].email,
+                          value: _number(summary.topSenders[i].count),
+                          onTap: summary.topSenders[i].id.isEmpty
+                              ? null
+                              : () => Navigator.pushNamed(
+                                  context,
+                                  SenderDetailsScreen.routeName,
+                                  arguments: summary.topSenders[i].id,
+                                ),
+                        ),
+                        if (i < summary.topSenders.take(3).length - 1)
+                          const Divider(height: 1),
+                      ],
+                    ],
+                  ),
+                ),
+              const SizedBox(height: 24),
+              _SectionHeading(
+                title: 'Security alerts',
+                action: TextButton(
+                  onPressed: () => Navigator.pushNamed(
+                    context,
+                    SecurityAlertsScreen.routeName,
+                  ),
+                  child: const Text('View all'),
+                ),
+              ),
+              if (summary.recentAlerts.isEmpty)
+                const _OverviewRow(
+                  icon: Icons.check_circle_outline_rounded,
+                  title: 'No open alerts',
+                  subtitle: 'Nothing currently needs review.',
+                )
+              else
+                _OverviewPanel(
+                  child: Column(
+                    children: [
+                      for (
+                        var i = 0;
+                        i < summary.recentAlerts.take(2).length;
+                        i++
+                      ) ...[
+                        _OverviewRow(
+                          key: ValueKey(
+                            'dashboard-alert-${summary.recentAlerts[i].id}',
+                          ),
+                          icon: Icons.shield_outlined,
+                          title: summary.recentAlerts[i].title,
+                          subtitle: summary.recentAlerts[i].reason,
+                          onTap: () => Navigator.pushNamed(
+                            context,
+                            '/alert-details',
+                            arguments: summary.recentAlerts[i],
+                          ),
+                        ),
+                        if (i < summary.recentAlerts.take(2).length - 1)
+                          const Divider(height: 1),
+                      ],
+                    ],
+                  ),
+                ),
+              const SizedBox(height: 24),
+              _OverviewRow(
+                key: const ValueKey('dashboard-sync'),
+                icon: Icons.sync_rounded,
+                title: 'Mailbox sync',
+                subtitle: summary.syncRetryAt != null
+                    ? 'Retry scheduled automatically'
+                    : const {
+                        'PENDING',
+                        'SYNCING',
+                        'PARTIAL',
+                      }.contains(summary.syncStatus)
+                    ? 'Syncing in the background'
+                    : summary.lastSyncedAt == null
+                    ? 'Manage your mailbox connection'
+                    : 'Last updated ${formatMailDate(summary.lastSyncedAt!.toIso8601String(), detailed: true)}',
+                onTap: () => Navigator.pushNamed(
+                  context,
+                  ConnectedAccountsScreen.routeName,
+                ),
+              ),
+              if (_canScan(summary))
+                Align(
+                  alignment: Alignment.centerRight,
+                  child: TextButton.icon(
+                    onPressed: _queueing || _loading
+                        ? null
+                        : () => _scan(summary),
+                    icon: const Icon(Icons.refresh_rounded, size: 18),
+                    label: Text(_queueing ? 'Scheduling…' : 'Scan inbox'),
+                  ),
+                ),
+            ],
+          ],
+        ),
+      );
+    },
+  );
+}
+
+class _MailboxOverview extends StatelessWidget {
+  const _MailboxOverview({required this.summary});
+  final DashboardSummary summary;
+  @override
+  Widget build(BuildContext context) {
+    final metrics =
+        <
+          ({
+            String label,
+            int count,
+            IconData icon,
+            String route,
+            Object? arguments,
+          })
+        >[
+          (
+            label: 'Senders',
+            count: summary.totalSenders,
+            icon: Icons.people_outline_rounded,
+            route: AllSendersScreen.routeName,
+            arguments: null,
+          ),
+          (
+            label: 'Unread',
+            count: summary.unreadEmails,
+            icon: Icons.mark_email_unread_outlined,
+            route: EmailsScreen.routeName,
+            arguments: const EmailListArguments(
+              mailbox: 'UNREAD',
+              title: 'Unread Emails',
+            ),
+          ),
+          (
+            label: 'Promotions',
+            count: summary.promotions,
+            icon: Icons.local_offer_outlined,
+            route: EmailsScreen.routeName,
+            arguments: const EmailListArguments(
+              mailbox: 'ALL',
+              category: 'PROMOTIONS',
+              title: 'Promotions',
+            ),
+          ),
+          (
+            label: 'Spam',
+            count: summary.spam,
+            icon: Icons.report_gmailerrorred_rounded,
+            route: EmailsScreen.routeName,
+            arguments: const EmailListArguments(
+              mailbox: 'ALL',
+              category: 'SPAM',
+              title: 'Spam / Junk',
+            ),
+          ),
+        ];
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Padding(
+          padding: const EdgeInsets.only(top: 12, bottom: 24),
+          child: SizedBox(
+            width: double.infinity,
+            child: Column(
+              children: [
+                Text(
+                  'Your mailbox',
+                  textAlign: TextAlign.center,
+                  style: Theme.of(context).textTheme.titleMedium,
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  '${_number(summary.totalMessages)} messages',
+                  textAlign: TextAlign.center,
+                  style: Theme.of(context).textTheme.headlineMedium?.copyWith(
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+        LayoutBuilder(
+          builder: (context, constraints) {
+            final columns = constraints.maxWidth >= 620
+                ? 4
+                : MediaQuery.textScalerOf(context).scale(14) > 20
+                ? 1
+                : 2;
+            final width = (constraints.maxWidth - (columns - 1) * 10) / columns;
+            return Wrap(
+              spacing: 10,
+              runSpacing: 10,
+              children: [
+                for (final item in metrics)
+                  SizedBox(
+                    width: width,
+                    child: Material(
+                      color: Theme.of(context).colorScheme.surfaceContainer,
+                      borderRadius: BorderRadius.circular(12),
+                      clipBehavior: Clip.antiAlias,
+                      child: InkWell(
+                        key: ValueKey('dashboard-metric-${item.label}'),
+                        onTap: () {
+                          if (item.arguments == null) {
+                            AppNavigation.open(context, item.route);
+                          } else {
+                            Navigator.pushNamed(
+                              context,
+                              item.route,
+                              arguments: item.arguments,
+                            );
+                          }
+                        },
+                        child: Padding(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 10,
+                            vertical: 12,
+                          ),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.center,
+                            children: [
+                              Row(
+                                mainAxisAlignment: MainAxisAlignment.center,
+                                children: [
+                                  Icon(
+                                    item.icon,
+                                    size: 16,
+                                    color: Theme.of(
+                                      context,
+                                    ).colorScheme.primary,
+                                  ),
+                                  const SizedBox(width: 6),
+                                  Flexible(
+                                    child: Text(
+                                      item.label,
+                                      textAlign: TextAlign.center,
+                                      style: Theme.of(
+                                        context,
+                                      ).textTheme.bodySmall,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                              const SizedBox(height: 6),
+                              Text(
+                                _number(item.count),
+                                textAlign: TextAlign.center,
+                                style: Theme.of(context).textTheme.titleLarge
+                                    ?.copyWith(fontWeight: FontWeight.w700),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+              ],
+            );
+          },
+        ),
+      ],
+    );
+  }
+}
+
+class _OverviewPanel extends StatelessWidget {
+  const _OverviewPanel({required this.child});
+  final Widget child;
+  @override
+  Widget build(BuildContext context) => Material(
+    color: Theme.of(context).colorScheme.surfaceContainer,
+    borderRadius: BorderRadius.circular(12),
+    clipBehavior: Clip.antiAlias,
+    child: child,
+  );
+}
+
+class _OverviewRow extends StatelessWidget {
+  const _OverviewRow({
+    super.key,
+    this.icon,
+    this.leading,
+    required this.title,
+    this.subtitle,
+    this.value,
+    this.onTap,
+  });
+  final IconData? icon;
+  final Widget? leading;
+  final String title;
+  final String? subtitle, value;
+  final VoidCallback? onTap;
+  @override
+  Widget build(BuildContext context) => Semantics(
+    button: onTap != null,
+    child: InkWell(
+      onTap: onTap,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            leading ??
+                Icon(
+                  icon,
+                  size: 22,
+                  color: Theme.of(context).colorScheme.onSurfaceVariant,
+                ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(title, style: Theme.of(context).textTheme.titleSmall),
+                  if (subtitle != null) ...[
+                    const SizedBox(height: 4),
+                    Text(
+                      subtitle!,
+                      maxLines: 3,
+                      overflow: TextOverflow.ellipsis,
+                      style: Theme.of(context).textTheme.bodySmall,
+                    ),
+                  ],
+                  if (value != null) ...[
+                    const SizedBox(height: 4),
+                    Text(value!, style: Theme.of(context).textTheme.labelLarge),
+                  ],
+                ],
               ),
             ),
-            const SizedBox(height: 4),
-            Text(
-              label,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                fontSize: 8,
-                fontWeight: FontWeight.w500,
-              ),
-            ),
+            if (onTap != null) ...[
+              const SizedBox(width: 8),
+              const Icon(Icons.chevron_right_rounded, size: 18),
+            ],
           ],
         ),
       ),
-    );
-  }
-}
-
-class _RiskPill extends StatelessWidget {
-  const _RiskPill({required this.label, required this.color});
-
-  final String label;
-  final Color color;
-
-  @override
-  Widget build(BuildContext context) {
-    final resolvedColor = AppColors.foregroundFor(context, color);
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
-      decoration: BoxDecoration(
-        color: AppColors.softFill(context, color),
-        borderRadius: BorderRadius.circular(99),
-      ),
-      child: Text(
-        label,
-        style: TextStyle(
-          color: resolvedColor,
-          fontSize: 8,
-          fontWeight: FontWeight.w800,
-        ),
-      ),
-    );
-  }
-}
-
-class _Dot extends StatelessWidget {
-  const _Dot({required this.color});
-
-  final Color color;
-
-  @override
-  Widget build(BuildContext context) {
-    final resolvedColor = AppColors.foregroundFor(context, color);
-    return Container(
-      width: 7,
-      height: 7,
-      decoration: BoxDecoration(color: resolvedColor, shape: BoxShape.circle),
-    );
-  }
-}
-
-class _SkeletonBox extends StatelessWidget {
-  const _SkeletonBox({required this.height, this.width, this.radius = 10});
-
-  final double height;
-  final double? width;
-  final double radius;
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      width: width,
-      height: height,
-      decoration: BoxDecoration(
-        color: AppColors.trackFor(context),
-        borderRadius: BorderRadius.circular(radius),
-      ),
-    );
-  }
-}
-
-class _MetricData {
-  const _MetricData({
-    required this.icon,
-    required this.value,
-    required this.label,
-    required this.detail,
-    required this.color,
-    required this.route,
-    this.arguments,
-  });
-
-  final IconData icon;
-  final int value;
-  final String label;
-  final String detail;
-  final Color color;
-  final String route;
-  final Object? arguments;
-}
-
-class _ActionData {
-  const _ActionData({
-    required this.icon,
-    required this.title,
-    required this.detail,
-    required this.color,
-    required this.onTap,
-  });
-
-  final IconData icon;
-  final String title;
-  final String detail;
-  final Color color;
-  final VoidCallback? onTap;
-}
-
-BoxDecoration _surfaceDecoration(
-  BuildContext context, {
-  double radius = 18,
-  Color tint = AppColors.primary,
-}) {
-  final isDark = AppColors.isDark(context);
-  return BoxDecoration(
-    color: isDark ? AppColors.darkElevatedCard : null,
-    gradient: isDark
-        ? null
-        : LinearGradient(
-            begin: Alignment.topLeft,
-            end: Alignment.bottomRight,
-            colors: AppColors.tonalGradientFor(
-              context,
-              tint,
-              elevated: true,
-              intensity: 0.72,
-            ),
-          ),
-    borderRadius: BorderRadius.circular(radius),
-    border: Border.all(
-      color: isDark
-          ? AppColors.darkBorder.withValues(alpha: 0.9)
-          : AppColors.tonalBorderFor(context, tint, intensity: 0.78),
     ),
-    boxShadow: [
-      BoxShadow(
-        color: AppColors.shadowFor(context),
-        blurRadius: 20,
-        offset: const Offset(0, 8),
+  );
+}
+
+class _SectionHeading extends StatelessWidget {
+  const _SectionHeading({required this.title, this.action});
+  final String title;
+  final Widget? action;
+  @override
+  Widget build(BuildContext context) => Row(
+    children: [
+      Expanded(
+        child: Text(title, style: Theme.of(context).textTheme.titleMedium),
       ),
+      ?action,
     ],
   );
 }
 
-String _relativeFromValue(String value) {
-  final parsed = DateTime.tryParse(value);
-  return parsed == null ? value : _relativeTime(parsed);
-}
-
-String _relativeTime(DateTime value) {
-  final difference = DateTime.now().difference(value.toLocal());
-  if (difference.isNegative || difference.inMinutes < 1) return 'just now';
-  if (difference.inMinutes < 60) return '${difference.inMinutes}m ago';
-  if (difference.inHours < 24) return '${difference.inHours}h ago';
-  if (difference.inDays < 7) return '${difference.inDays}d ago';
-  return '${value.toLocal().year}-${value.toLocal().month.toString().padLeft(2, '0')}-${value.toLocal().day.toString().padLeft(2, '0')}';
-}
-
-String _formatCount(int value) {
-  final source = value.abs().toString();
-  final buffer = StringBuffer();
-  for (var index = 0; index < source.length; index++) {
-    if (index > 0 && (source.length - index) % 3 == 0) buffer.write(',');
-    buffer.write(source[index]);
-  }
-  return value < 0 ? '-$buffer' : buffer.toString();
-}
-
-String _formatBytes(int bytes) {
-  if (bytes < 1024) return '$bytes B';
-  if (bytes < 1024 * 1024) return '${(bytes / 1024).toStringAsFixed(1)} KB';
-  if (bytes < 1024 * 1024 * 1024) {
-    return '${(bytes / (1024 * 1024)).toStringAsFixed(1)} MB';
-  }
-  return '${(bytes / (1024 * 1024 * 1024)).toStringAsFixed(1)} GB';
-}
-
-String _scanActionDetail(DashboardSummary summary) {
-  return switch (summary.syncStatus) {
-    'PENDING' => 'Queued',
-    'SYNCING' => 'In progress',
-    'PARTIAL' => 'Importing older mail',
-    'FAILED' => 'Retry available',
-    'DISCONNECTED' => 'Reconnect required',
-    'READY' =>
-      summary.lastSyncedAt == null
-          ? 'Refresh metadata'
-          : _relativeSync(summary.lastSyncedAt),
-    _ => 'Account unavailable',
-  };
-}
-
-String _relativeSync(DateTime? value) {
-  if (value == null) return 'Ready';
-  return 'Synced ${_relativeTime(value)}';
-}
+String _number(int value) => value.toString().replaceAllMapped(
+  RegExp(r'(\d)(?=(\d{3})+(?!\d))'),
+  (match) => '${match[1]},',
+);
+String _bytes(int bytes) => bytes < 1024 * 1024
+    ? '${(bytes / 1024).round()} KB'
+    : bytes < 1024 * 1024 * 1024
+    ? '${(bytes / (1024 * 1024)).round()} MB'
+    : '${(bytes / (1024 * 1024 * 1024)).toStringAsFixed(1)} GB';

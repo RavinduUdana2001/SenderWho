@@ -23,7 +23,12 @@ export class YahooSyncService {
     private readonly metadata: GmailSyncService,
   ) {}
 
-  async syncAccount(emailAccountId: string, onProgress?: SyncProgress) {
+  async syncAccount(
+    emailAccountId: string,
+    onProgress?: SyncProgress,
+    signal?: AbortSignal,
+  ) {
+    signal?.throwIfAborted();
     const claimed = await this.prisma.emailAccount.updateMany({
       where: {
         id: emailAccountId,
@@ -70,12 +75,14 @@ export class YahooSyncService {
       );
       let processed = 0;
       for (const message of page.messages) {
+        signal?.throwIfAborted();
         const blocked = await this.metadata.persistProviderMessage(
           emailAccountId,
           account.userId,
           message,
         );
         if (blocked && !(message.labelIds ?? []).includes("TRASH")) {
+          signal?.throwIfAborted();
           const moved = await this.applyMessageAction(
             emailAccountId,
             message.id,
@@ -100,6 +107,7 @@ export class YahooSyncService {
           await onProgress?.(processed, page.discovered);
         }
       }
+      signal?.throwIfAborted();
       await this.metadata.recalculateAccount(emailAccountId);
       await this.metadata.refreshCleanupSuggestions(emailAccountId);
       const needsContinuation = page.nextCursor != null;
@@ -127,6 +135,7 @@ export class YahooSyncService {
         backfillProcessed,
       };
     } catch (error) {
+      if (signal?.aborted) throw error;
       const message =
         error instanceof Error
           ? error.message.slice(0, 1_000)

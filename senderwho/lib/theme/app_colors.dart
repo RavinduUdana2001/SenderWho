@@ -7,12 +7,12 @@ class AppColors {
   // action fills use slightly deeper companions where white text requires AA
   // contrast.
   static const Color brandNavy = Color(0xFF0B1630);
-  static const Color brandBlue = Color(0xFF4058D8);
-  static const Color brandViolet = Color(0xFF5B4FD1);
+  static const Color brandBlue = Color(0xFF6F32B8);
+  static const Color brandViolet = Color(0xFF7633C7);
   static const Color brandCyan = Color(0xFF3A8DFF);
   static const Color brandMagenta = Color(0xFFC85B76);
-  static const Color darkPrimary = Color(0xFF7C8CFF);
-  static const Color darkSecondary = Color(0xFFA78BFA);
+  static const Color darkPrimary = Color(0xFFB178FF);
+  static const Color darkSecondary = Color(0xFFBE98F5);
   static const Color darkAccent = Color(0xFF60A5FA);
   static const Color darkDanger = Color(0xFFFB7185);
   static const Color darkSuccess = Color(0xFF36D399);
@@ -20,8 +20,8 @@ class AppColors {
   static const Color darkInfo = Color(0xFF60A5FA);
   static const Color darkSocial = Color(0xFFF0A6C5);
 
-  static const Color lightVisualPrimary = Color(0xFF4F6BFF);
-  static const Color lightVisualSecondary = Color(0xFF7A6CFF);
+  static const Color lightVisualPrimary = Color(0xFF7637C8);
+  static const Color lightVisualSecondary = Color(0xFF8854C7);
   static const Color lightVisualSuccess = Color(0xFF2BBF9B);
   static const Color lightVisualInfo = Color(0xFF3A8DFF);
   static const Color lightVisualAlert = Color(0xFFE46A6A);
@@ -42,21 +42,21 @@ class AppColors {
   static const Color medalBronze = Color(0xFFC98755);
   static const Color info = Color(0xFF176FC7);
 
-  static const Color background = Color(0xFFF6F8FC);
-  static const Color darkBackground = Color(0xFF07111F);
+  static const Color background = Color(0xFFFFFFFF);
+  static const Color darkBackground = Color(0xFF101518);
   static const Color card = Color(0xFFFFFFFF);
-  static const Color darkCard = Color(0xFF0D1728);
-  static const Color elevatedCard = Color(0xFFFAFBFF);
-  static const Color darkElevatedCard = Color(0xFF122038);
-  static const Color text = Color(0xFF162033);
-  static const Color darkText = Color(0xFFF3F7FF);
-  static const Color muted = Color(0xFF5F6C85);
-  static const Color darkMuted = Color(0xFF94A3B8);
+  static const Color darkCard = Color(0xFF181E22);
+  static const Color elevatedCard = Color(0xFFF2F3F5);
+  static const Color darkElevatedCard = Color(0xFF242C33);
+  static const Color text = Color(0xFF202124);
+  static const Color darkText = Color(0xFFF2F3F4);
+  static const Color muted = Color(0xFF62666F);
+  static const Color darkMuted = Color(0xFFAFB4BA);
   static const Color secondary = Color(0xFF71809A);
-  static const Color subtle = Color(0xFFEEF3FF);
+  static const Color subtle = Color(0xFFF0F1F3);
   static const Color darkTertiaryMuted = Color(0xFF64748B);
-  static const Color darkSubtle = Color(0xFF18263B);
-  static const Color border = Color(0xFFD8E2F2);
+  static const Color darkSubtle = Color(0xFF30373D);
+  static const Color border = Color(0xFFE6E8EB);
   static const Color primary = lightVisualPrimary;
   static const Color indigo = lightVisualSecondary;
   static const Color cyan = brandCyan;
@@ -68,7 +68,7 @@ class AppColors {
   static const Color danger = Color(0xFFC74C4C);
   static const Color chipBlue = Color(0xFFEEF3FF);
   static const Color chipGreen = chipBlue;
-  static const Color darkBorder = Color(0xFF22324E);
+  static const Color darkBorder = Color(0xFF30373D);
   static const Color darkButtonPurple = darkVisualPrimary;
   static const Color onBrand = Color(0xFFFFFFFF);
   static const Color onBrandMuted = Color(0xFFCBD5E1);

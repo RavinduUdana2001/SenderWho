@@ -1,3 +1,4 @@
+import { mailboxScope } from "../common/mailbox-scope";
 import { CleanupService } from "../cleanup/cleanup.service";
 import { UnsubscribeService } from "../unsubscribe/unsubscribe.service";
 import { JobStatus } from "@prisma/client";
@@ -63,6 +64,7 @@ describe("Queued job ownership", () => {
       expect.objectContaining({
         where: {
           userId: "owner-user",
+          sender: mailboxScope("owner-user"),
           status: {
             in: [JobStatus.QUEUED, JobStatus.RUNNING, JobStatus.FAILED],
           },

@@ -1,0 +1,183 @@
+SenderWho - CASA Access Control Evidence
+Prepared: 12 October 2026
+Basis: review of the current application source, plus the developer's confirmation
+that the live app has no publicly exposed administrative page. This document
+describes implementation; it is not a DAST report or a production test result.
+
+Requirements 3.1.1, 3.1.2 and 3.1.3 - Shared written description
+
+SenderWho authenticates users through external OAuth providers and issues signed
+application access tokens backed by database sessions. The backend registers
+JwtAuthGuard globally. Routes require authentication unless explicitly marked
+public for purposes such as OAuth, public legal pages, or health checks.
+
+The current application defines ordinary user access based on ownership; it has
+no administrator role or user-facing role-assignment API. Authenticated users can
+access and manage their own connected accounts, emails, senders, jobs, alerts,
+preferences, profile/export, and app sessions.
+
+JwtAuthGuard validates the access token and requires an active, unexpired session
+belonging to the token's user, with no revoked session or deleted user. Controllers
+obtain the current user ID from the verified request principal via CurrentUser,
+rather than taking the acting user ID from a client-provided parameter.
+
+Reviewed resource services apply ownership filters such as { id, userId } or
+first check that the referenced account or resource belongs to the current user
+before performing a mutation. Bulk message operations verify ownership of every
+requested message before calling the provider. Client-provided object identifiers
+therefore do not, by themselves, grant access to another user's objects.
+
+The global ValidationPipe allows declared DTO fields and rejects undeclared
+fields. Users may change authorized preferences and controls for their own data;
+these do not grant application permissions over another user's data. Authentication
+and authorization decisions remain on the backend.
+
+Missing, invalid, expired, revoked, or incomplete access tokens are rejected.
+Missing or inaccessible resources are rejected before the reviewed operations
+continue. If session database verification raises an exception, the guard does
+not grant access. No fallback permits a protected action after verification
+failure. Production environment validation rejects mock mode.
+
+Source references:
+- server/src/auth/auth.module.ts: global JwtAuthGuard registration.
+- server/src/auth/jwt-auth.guard.ts: token verification, session ownership and
+  expiry, revoked/deleted-state checks, rejection paths, verified principal.
+- server/src/auth/current-user.decorator.ts: reads the verified principal.
+- server/src/main.ts: global DTO whitelist and rejection of undeclared fields.
+- server/src/common/config/validate-environment.ts: production mock-mode rejection.
+- server/src/email-messages/email-messages.service.ts: getById and applyAction.
+- server/src/email-accounts/email-accounts.service.ts: ownership checks.
+- server/src/settings/dto/update-preferences.dto.ts: permitted preference fields.
+
+Requirement 3.1.4 - API inventory and IDOR protections
+
+Paths below use the default API prefix /api/v1. Deployment can configure a
+different API_PREFIX. :id denotes a client-supplied path identifier.
+
+Object identifiers in paths:
+- GET /api/v1/emails/:id
+- GET /api/v1/emails/:id/thread
+- GET /api/v1/emails/:id/content
+- POST /api/v1/email-accounts/:id/sync
+- POST /api/v1/email-accounts/:id/activate
+- DELETE /api/v1/email-accounts/:id
+- GET /api/v1/senders/:id
+- PATCH /api/v1/senders/:id/block
+- PATCH /api/v1/senders/:id/trust
+- GET /api/v1/security-alerts/:id
+- PATCH /api/v1/security-alerts/:id/resolve
+- PATCH /api/v1/security-alerts/:id/dismiss
+- GET /api/v1/cleanup/jobs/:id
+- POST /api/v1/cleanup/jobs/:id/cancel
+- GET /api/v1/unsubscribe/jobs/:id
+- DELETE /api/v1/auth/sessions/:id
+
+Object identifiers in request bodies or filters:
+- POST /api/v1/emails/actions/read-state: messageIds and isRead.
+- POST /api/v1/emails/actions/archive: messageIds.
+- POST /api/v1/emails/actions/unarchive: messageIds.
+- POST /api/v1/emails/actions/trash: messageIds.
+- POST /api/v1/emails/actions/restore: messageIds.
+- GET /api/v1/emails: senderId and other list filters/pagination.
+- POST /api/v1/cleanup/preview: emailAccountId and categories.
+- POST /api/v1/cleanup/jobs: emailAccountId, categories and previewId.
+- POST /api/v1/unsubscribe/jobs: senderId.
+- POST /api/v1/unsubscribe/jobs/batch: senderIds.
+- POST /api/v1/unsubscribe/jobs/status: jobIds.
+
+Other user-scoped APIs with caller-supplied query/body values:
+- GET /api/v1/senders: list filters and pagination.
+- GET /api/v1/security-alerts: list filters and pagination.
+- POST /api/v1/search: search terms, filters and pagination.
+- PATCH /api/v1/settings/preferences: authorized preference fields.
+- GET /api/v1/users/me/export: section and pagination.
+- POST /api/v1/auth/connect/google/start and /connect/microsoft/start:
+  optional loginHint; target user/session are taken from the verified principal.
+
+Public OAuth/session entry points accept protocol data rather than grant access
+based on a caller-supplied user ID: OAuth start/callback routes, OAuth-session
+exchange (sessionId/sessionSecret), refresh (refreshToken), and logout
+(refreshToken). The exchange requires the matching secret; state, expiry and
+session status are validated. Authenticated reauthentication/account connection
+flows are bound to the current app user/session.
+
+Ownership controls:
+- Email detail/content/thread lookups include the authenticated userId.
+- Bulk email actions query by userId plus the requested IDs and reject a batch
+  if any requested message is missing from that user's accessible set.
+- Account sync, activation and disconnection check account ownership.
+- Sender and alert reads/updates first check ownership.
+- Cleanup creation checks account ownership and validates a preview owned by
+  that user/account. Job reads/cancellation check job ownership.
+- Unsubscribe creation checks sender ownership; job reads/status filter by userId.
+- App-session revocation includes both the session ID and authenticated userId.
+- Profile/settings/export operations derive the user from the authenticated
+  principal rather than allowing arbitrary target user IDs.
+
+This inventory describes source implementation. Comprehensive production
+cross-user/IDOR testing is to be established separately by the assessment.
+
+Requirement 3.1.5 - CSRF and unauthenticated automation
+
+API requests authenticate with explicit bearer headers rather than session
+cookies. CORS uses configured origins and credentials:false. OAuth state is
+signed, time limited and associated with a server-side login record; PKCE S256
+is used. Public OAuth/session routes have route-specific request throttles.
+These implementation details support review; the requested DAST results are
+separate evidence and are not supplied by this document.
+
+Requirement 3.1.6 - Directory browsing
+
+The reviewed NestJS bootstrap does not enable directory listing. The supplied
+deploy/hostinger/Caddyfile reverse proxies the API and does not configure a
+browsable file server. Actual deployed hosting settings and directory browsing
+must be checked by the required scan. This document is not scan evidence.
+
+Requirement 3.2.1 - OAuth flow
+
+SenderWho implements OAuth Authorization Code with PKCE S256. startOAuth generates
+a random verifier and SHA-256 challenge, and sends response_type=code,
+code_challenge and code_challenge_method=S256. Provider authorization codes are
+exchanged server-side with grant_type=authorization_code and code_verifier. The
+reviewed implementation does not use the implicit or resource owner password
+credentials flows.
+
+Source references:
+- server/src/auth/auth.service.ts: startOAuth.
+- server/src/auth/auth.service.ts: exchangeGoogleCode; corresponding Microsoft
+  and Yahoo exchanges use the same authorization-code/PKCE pattern when enabled.
+
+Requirement 3.2.2 - OAuth state and redirect URI
+
+The redirect_uri comes from the server's configured provider callback URL and is
+not supplied by the app user. The same configured URL is used in the authorization
+request and code exchange. Production validation requires HTTPS callback URLs.
+The callback URL must also match the authorized redirect URI registered in the
+identity provider console; that console configuration has not been inspected in
+this source review and should be supplied as separate evidence.
+
+OAuth state is signed and expires in 10 minutes. verifyState checks the signature
+and expiry, provider, purpose and login session identifier, then requires the
+matching pending, unexpired database login record. Missing or mismatched state is
+rejected. Login-session exchange is single-use and requires its matching secret.
+The browser completion deep link is a fixed senderwho://oauth/callback address,
+not a caller-controlled redirect destination.
+
+Source references:
+- server/src/auth/auth.service.ts: startOAuth, verifyState,
+  exchangeOAuthSession and exchangeGoogleCode.
+- server/src/auth/auth.controller.ts: oauthResultPage.
+- server/src/common/config/validate-environment.ts: HTTPS callback validation.
+
+Requirement 3.3.1 - Administrative interface scope
+
+The current application source contains no application administrator role or
+administrative dashboard routes or Flutter administration screen. The development
+docker-compose.yml includes optional Adminer under the tools profile, bound to
+127.0.0.1:8080; it is a local database tool and is not included in the reviewed
+production compose files. Production validation also forbids enabling Swagger.
+The developer confirms that the live app has
+no publicly exposed administrative page. Administrative-interface MFA is
+therefore proposed as not applicable to these app interfaces, subject to the
+assessor's scope determination. No claim is made here about MFA configuration
+for external hosting, database or cloud-management accounts.

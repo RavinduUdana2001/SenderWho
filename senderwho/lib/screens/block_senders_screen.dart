@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../services/senderwho_repository.dart';
+import '../services/repository_scope.dart';
 import '../theme/app_colors.dart';
 import '../utils/responsive.dart';
 import '../widgets/app_button.dart';
@@ -10,7 +11,8 @@ import '../widgets/app_page.dart';
 import '../widgets/icon_bubble.dart';
 
 class BlockSendersScreen extends StatefulWidget {
-  const BlockSendersScreen({super.key});
+  const BlockSendersScreen({super.key, this.repository});
+  final SenderWhoRepository? repository;
 
   static const routeName = '/block-senders';
 
@@ -29,13 +31,13 @@ class _BlockSendersScreenState extends State<BlockSendersScreen> {
     final email = values['email'] as String? ?? '';
 
     return AppPage(
+      header: const AppHeader(
+        title: 'Block Sender',
+        subtitle: 'Confirm this sender control',
+        showBack: true,
+      ),
       child: Column(
         children: [
-          const AppHeader(
-            title: 'Block Sender',
-            subtitle: 'Confirm this sender control',
-            showBack: true,
-          ),
           SizedBox(height: context.gap(18)),
           AppCard(
             padding: const EdgeInsets.all(24),
@@ -100,8 +102,10 @@ class _BlockSendersScreenState extends State<BlockSendersScreen> {
                   ? null
                   : () async {
                       setState(() => _busy = true);
-                      final blocked = await senderWhoRepository
-                          .setSenderBlocked(senderId, true);
+                      final blocked =
+                          await (widget.repository ??
+                                  RepositoryScope.read(context))
+                              .setSenderBlocked(senderId, true);
                       if (!context.mounted) return;
                       setState(() => _busy = false);
                       ScaffoldMessenger.of(context).showSnackBar(

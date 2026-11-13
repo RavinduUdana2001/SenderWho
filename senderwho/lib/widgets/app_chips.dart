@@ -68,25 +68,16 @@ class SelectablePill extends StatelessWidget {
       child: AnimatedContainer(
         duration: AppMotion.responsive(context, AppMotion.standard),
         curve: AppMotion.enter,
-        constraints: const BoxConstraints(minHeight: 38),
+        constraints: const BoxConstraints(minHeight: 44),
         padding: const EdgeInsets.symmetric(horizontal: 15, vertical: 8),
         decoration: BoxDecoration(
-          color: selected ? primary : AppColors.elevatedSurface(context),
+          color: selected ? primary : AppColors.trackFor(context),
           borderRadius: BorderRadius.circular(AppRadii.pill),
           border: Border.all(
             color: selected
                 ? primary
                 : AppColors.borderFor(context).withValues(alpha: 0.62),
           ),
-          boxShadow: selected
-              ? [
-                  BoxShadow(
-                    color: primary.withValues(alpha: 0.2),
-                    blurRadius: 10,
-                    offset: const Offset(0, 4),
-                  ),
-                ]
-              : null,
         ),
         child: Center(
           widthFactor: 1,

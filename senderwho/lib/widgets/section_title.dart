@@ -16,31 +16,46 @@ class SectionTitle extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Row(
-      children: [
-        Expanded(
-          child: Text(
-            title,
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-            style: Theme.of(context).textTheme.titleMedium?.copyWith(
-              fontWeight: FontWeight.w800,
-              color: AppColors.textFor(context),
-              letterSpacing: 0,
-            ),
-          ),
-        ),
-        if (actionLabel != null)
-          TextButton(
+    final heading = Text(
+      title,
+      style: Theme.of(context).textTheme.titleMedium?.copyWith(
+        fontWeight: FontWeight.w800,
+        color: AppColors.textFor(context),
+        letterSpacing: 0,
+      ),
+    );
+    final action = actionLabel == null
+        ? null
+        : TextButton(
             onPressed: onAction,
             style: TextButton.styleFrom(
-              minimumSize: const Size(44, 40),
+              minimumSize: const Size(44, 44),
               padding: const EdgeInsets.symmetric(horizontal: 8),
-              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
             ),
             child: Text(actionLabel!),
-          ),
-      ],
+          );
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final stack =
+            constraints.maxWidth < 400 &&
+            MediaQuery.textScalerOf(context).scale(14) > 18;
+        if (stack) {
+          return Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              heading,
+              if (action != null)
+                Align(alignment: Alignment.centerRight, child: action),
+            ],
+          );
+        }
+        return Row(
+          children: [
+            Expanded(child: heading),
+            if (action != null) Flexible(child: action),
+          ],
+        );
+      },
     );
   }
 }

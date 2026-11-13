@@ -37,6 +37,7 @@ import { GmailClient } from "../providers/gmail/gmail.client";
 import { MicrosoftGraphClient } from "../providers/microsoft/microsoft-graph.client";
 import { YahooImapClient } from "../providers/yahoo/yahoo-imap.client";
 import { AccessTokenPayload } from "./auth-user.interface";
+import { missingGoogleScopes } from "./google-scopes";
 
 type OAuthProvider = "google" | "microsoft" | "yahoo";
 
@@ -50,6 +51,8 @@ interface GoogleTokenResponse {
 }
 
 interface GoogleIdTokenClaims {
+  name?: string;
+  picture?: string;
   sub?: string;
   email?: string;
   email_verified?: string | boolean;
@@ -138,6 +141,7 @@ interface OAuthState {
 
 const GOOGLE_SCOPES = [
   "openid",
+  "profile",
   "https://www.googleapis.com/auth/userinfo.email",
   "https://www.googleapis.com/auth/gmail.modify",
 ];
@@ -271,6 +275,9 @@ export class AuthService {
       authorizationUrl.searchParams.set("include_granted_scopes", "true");
       if (options.loginHint) {
         authorizationUrl.searchParams.set("login_hint", options.loginHint);
+        if (options.purpose === "ADD_ACCOUNT") {
+          authorizationUrl.searchParams.set("prompt", "consent");
+        }
       } else {
         authorizationUrl.searchParams.set("prompt", "select_account");
       }
@@ -429,10 +436,8 @@ export class AuthService {
           "Google identity and Gmail account do not match.",
         );
       }
-      const scopes = (tokens.scope ?? "").split(" ").filter(Boolean);
-      const missingScopes = GOOGLE_SCOPES.filter(
-        (requiredScope) => !scopes.includes(requiredScope),
-      );
+      const scopes = (tokens.scope ?? "").split(/\s+/).filter(Boolean);
+      const missingScopes = missingGoogleScopes(scopes, GOOGLE_SCOPES);
       if (missingScopes.length > 0) {
         throw new UnauthorizedException(
           "Google did not grant all required SenderWho permissions.",
@@ -527,6 +532,7 @@ export class AuthService {
               providerAccountId,
               emailAddress,
               existingAccount?.userId,
+              { name: identity.name, picture: identity.picture },
             );
       const accessTokenEncrypted = this.tokenEncryption.encrypt(
         tokens.access_token,
@@ -967,6 +973,23 @@ export class AuthService {
     await this.writeSecurityAudit(
       userId,
       "auth.all_sessions_revoked",
+      undefined,
+      {},
+    );
+    return { success: true, revokedSessions: result.count };
+  }
+
+  async revokeSessionsAfterProviderPasswordChange(userId: string) {
+    const result = await this.prisma.appSession.updateMany({
+      where: { userId, revokedAt: null },
+      data: {
+        revokedAt: new Date(),
+        revocationReason: "PROVIDER_PASSWORD_CHANGE_REPORTED",
+      },
+    });
+    await this.writeSecurityAudit(
+      userId,
+      "auth.provider_password_change_reported_sessions_revoked",
       undefined,
       {},
     );
@@ -2293,8 +2316,11 @@ export class AuthService {
     googleSubject: string,
     emailAddress: string,
     existingUserId?: string,
+    profile?: { name?: string; picture?: string },
   ) {
     const normalizedEmail = emailAddress.trim().toLowerCase();
+    const displayName = profile?.name?.trim().slice(0, 191) || undefined;
+    const avatarUrl = this.profileAvatarUrl(profile?.picture);
     const user = existingUserId
       ? await this.prisma.user.findFirst({
           where: { id: existingUserId, deletedAt: null },
@@ -2307,7 +2333,7 @@ export class AuthService {
         });
     if (!user) {
       return this.prisma.user.create({
-        data: { email: normalizedEmail, googleSubject },
+        data: { email: normalizedEmail, googleSubject, displayName, avatarUrl },
       });
     }
     if (user.googleSubject && user.googleSubject !== googleSubject) {
@@ -2326,8 +2352,22 @@ export class AuthService {
     }
     return this.prisma.user.update({
       where: { id: user.id },
-      data: { googleSubject, email: normalizedEmail },
+      data: {
+        googleSubject,
+        email: normalizedEmail,
+        displayName: displayName ?? user.displayName ?? undefined,
+        avatarUrl: avatarUrl ?? user.avatarUrl ?? undefined,
+      },
     });
+  }
+
+  private profileAvatarUrl(value?: string) {
+    if (!value || value.length > 191) return undefined;
+    try {
+      return new URL(value).protocol === "https:" ? value : undefined;
+    } catch {
+      return undefined;
+    }
   }
 
   private safeErrorMessage(error: unknown) {

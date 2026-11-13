@@ -2,6 +2,7 @@ import { Injectable } from "@nestjs/common";
 import { BackgroundJob, BackgroundJobStatus, Prisma } from "@prisma/client";
 import { randomUUID } from "node:crypto";
 import { PrismaService } from "../database/prisma.service";
+import { ProviderRetryError } from "../common/provider-retry.error";
 
 export type DatabaseJobOptions = {
   jobId?: string;
@@ -18,6 +19,7 @@ export type ProcessorJob<T> = {
   attemptsMade: number;
   opts: { attempts: number };
   updateProgress(progress: unknown): Promise<void>;
+  signal?: AbortSignal;
 };
 
 export class QueuedDatabaseJob<T = unknown> {
@@ -228,10 +230,11 @@ export class DatabaseJobQueueService {
   }
 
   async extendLease(id: string, owner: string, leaseMs: number) {
-    await this.prisma.backgroundJob.updateMany({
+    const result = await this.prisma.backgroundJob.updateMany({
       where: { id, status: BackgroundJobStatus.RUNNING, leaseOwner: owner },
       data: { leaseExpiresAt: new Date(Date.now() + leaseMs) },
     });
+    return result.count === 1;
   }
 
   async updateProgress(id: string, owner: string, progress: unknown) {
@@ -257,7 +260,18 @@ export class DatabaseJobQueueService {
   async fail(record: BackgroundJob, owner: string, error: unknown) {
     const retry = record.attempts < record.maxAttempts;
     const multiplier = Math.max(0, record.attempts - 1);
-    const delay = Math.min(record.backoffMs * 2 ** multiplier, 15 * 60_000);
+    const ordinaryDelay = Math.min(
+      record.backoffMs * 2 ** multiplier,
+      15 * 60_000,
+    );
+    const providerDelay =
+      error instanceof ProviderRetryError
+        ? Math.min(
+            error.retryAfterMs * 2 ** Math.min(multiplier, 4),
+            24 * 60 * 60_000,
+          )
+        : 0;
+    const delay = Math.max(ordinaryDelay, providerDelay);
     await this.prisma.backgroundJob.updateMany({
       where: {
         id: record.id,

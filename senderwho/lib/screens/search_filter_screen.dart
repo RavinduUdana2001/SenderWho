@@ -1,9 +1,13 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart';
+import '../services/api_transport.dart';
 
 import '../models/app_models.dart';
-import '../screens/sender_details_screen.dart';
+import '../screens/all_senders_screen.dart';
+import '../widgets/mail_message_row.dart';
 import '../screens/email_details_screen.dart';
 import '../services/senderwho_repository.dart';
+import '../services/repository_scope.dart';
 import '../theme/app_colors.dart';
 import '../utils/responsive.dart';
 import '../widgets/app_button.dart';
@@ -14,6 +18,23 @@ import '../widgets/app_header.dart';
 import '../widgets/app_page.dart';
 import '../widgets/search_box.dart';
 import '../widgets/section_title.dart';
+
+class _SearchCriteria {
+  _SearchCriteria(
+    this.query,
+    Set<String> selected,
+    this.attachments,
+    this.unread,
+  ) : selected = Set.unmodifiable(selected);
+  final String query;
+  final Set<String> selected;
+  final bool attachments, unread;
+  bool matches(_SearchCriteria other) =>
+      query == other.query &&
+      attachments == other.attachments &&
+      unread == other.unread &&
+      setEquals(selected, other.selected);
+}
 
 class SearchFilterScreen extends StatefulWidget {
   const SearchFilterScreen({super.key, this.repository});
@@ -32,22 +53,36 @@ class _SearchFilterScreenState extends State<SearchFilterScreen> {
   SearchResults? _results;
   bool _searching = false;
   bool _loadingMore = false;
-  bool _filtersExpanded = true;
+  bool _filtersExpanded = false;
   String? _searchError;
   bool attachments = false;
   bool unread = false;
+  _SearchCriteria? _applied;
+  RequestCancellation? _searchCancellation;
+  int _generation = 0;
+  _SearchCriteria get _draft => _SearchCriteria(
+    _queryController.text.trim(),
+    selected,
+    attachments,
+    unread,
+  );
+  bool get _draftChanged => _applied != null && !_applied!.matches(_draft);
 
   SenderWhoRepository get _repository =>
-      widget.repository ?? senderWhoRepository;
+      widget.repository ?? RepositoryScope.read(context);
 
   @override
   void initState() {
     super.initState();
     _optionsFuture = _repository.getSearchFilterOptions();
+    _queryController.addListener(() {
+      if (mounted) setState(() {});
+    });
   }
 
   @override
   void dispose() {
+    _searchCancellation?.cancel();
     _queryController.dispose();
     super.dispose();
   }
@@ -60,13 +95,13 @@ class _SearchFilterScreenState extends State<SearchFilterScreen> {
         if (snapshot.connectionState == ConnectionState.waiting &&
             !snapshot.hasData) {
           return const AppPage(
+            header: AppHeader(
+              title: 'Search & Filter',
+              subtitle: 'Find a sender or message',
+            ),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                AppHeader(
-                  title: 'Search & Filter',
-                  subtitle: 'Find senders and messages in email metadata',
-                ),
                 SizedBox(height: 18),
                 AppCard(
                   padding: EdgeInsets.all(28),
@@ -86,13 +121,13 @@ class _SearchFilterScreenState extends State<SearchFilterScreen> {
 
         if (snapshot.hasError) {
           return AppPage(
+            header: const AppHeader(
+              title: 'Search & Filter',
+              subtitle: 'Find a sender or message',
+            ),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                const AppHeader(
-                  title: 'Search & Filter',
-                  subtitle: 'Find senders and messages in email metadata',
-                ),
                 SizedBox(height: context.gap(18)),
                 AppAsyncError(
                   message: appAsyncErrorMessage(snapshot.error),
@@ -106,13 +141,13 @@ class _SearchFilterScreenState extends State<SearchFilterScreen> {
         }
 
         return AppPage(
+          header: const AppHeader(
+            title: 'Search & Filter',
+            subtitle: 'Find a sender or message',
+          ),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              const AppHeader(
-                title: 'Search & Filter',
-                subtitle: 'Find senders and messages in email metadata',
-              ),
               SizedBox(height: context.gap(18)),
               SearchBox(
                 hint: 'Search senders or email',
@@ -244,10 +279,22 @@ class _SearchFilterScreenState extends State<SearchFilterScreen> {
               ],
               SizedBox(height: context.gap(18)),
               AppButton(
-                label: _searching ? 'Searching…' : 'Search email metadata',
+                label: _searching ? 'Searching…' : 'Search',
                 loading: _searching,
                 onPressed: _searching ? null : () => _applyFilters(),
               ),
+              if (_searching || _loadingMore)
+                TextButton(
+                  onPressed: _cancelSearch,
+                  child: const Text('Cancel search'),
+                ),
+              if (_draftChanged && _results != null) ...[
+                const SizedBox(height: 12),
+                Text(
+                  'Search options changed. Search again to update these results.',
+                  style: Theme.of(context).textTheme.bodySmall,
+                ),
+              ],
               if (_searchError case final error?) ...[
                 const SizedBox(height: 18),
                 AppAsyncError(
@@ -269,46 +316,19 @@ class _SearchFilterScreenState extends State<SearchFilterScreen> {
                 ],
                 if (results.total == 0)
                   Text(
-                    'No stored email metadata matches these filters.',
+                    'No emails match these filters.',
                     style: Theme.of(context).textTheme.bodyMedium,
                   ),
                 for (final sender in results.senders) ...[
-                  AppCard(
-                    padding: const EdgeInsets.all(16),
-                    onTap: () => Navigator.pushNamed(
-                      context,
-                      SenderDetailsScreen.routeName,
-                      arguments: sender.id,
-                    ),
-                    child: Row(
-                      children: [
-                        const Icon(
-                          Icons.person_outline_rounded,
-                          color: AppColors.primary,
-                        ),
-                        const SizedBox(width: 12),
-                        Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text(sender.name),
-                              const SizedBox(height: 4),
-                              Text(
-                                sender.email,
-                                style: Theme.of(context).textTheme.bodyMedium,
-                              ),
-                            ],
-                          ),
-                        ),
-                        Text('${sender.score}'),
-                      ],
-                    ),
+                  SenderRow(
+                    sender: sender,
+                    onChanged: () => _applyFilters(reset: true),
                   ),
-                  const SizedBox(height: 10),
+                  const Divider(height: 1),
                 ],
                 for (final email in results.emails) ...[
-                  AppCard(
-                    padding: const EdgeInsets.all(16),
+                  MailMessageRow(
+                    email: email,
                     onTap: email.id.isEmpty
                         ? null
                         : () => Navigator.pushNamed(
@@ -316,23 +336,8 @@ class _SearchFilterScreenState extends State<SearchFilterScreen> {
                             EmailDetailsScreen.routeName,
                             arguments: email,
                           ),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          email.subject,
-                          maxLines: 2,
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                        const SizedBox(height: 6),
-                        Text(
-                          '${email.sender} • ${email.date}',
-                          style: Theme.of(context).textTheme.bodyMedium,
-                        ),
-                      ],
-                    ),
                   ),
-                  const SizedBox(height: 10),
+                  const Divider(height: 1),
                 ],
                 if (results.hasMore) ...[
                   const SizedBox(height: 6),
@@ -359,25 +364,45 @@ class _SearchFilterScreenState extends State<SearchFilterScreen> {
     );
   }
 
-  Future<void> _applyFilters({bool reset = true}) async {
-    if (_searching || _loadingMore) return;
+  void _cancelSearch() {
+    _generation++;
+    _searchCancellation?.cancel();
     setState(() {
+      _searching = false;
+      _loadingMore = false;
+    });
+  }
+
+  Future<void> _applyFilters({bool reset = true}) async {
+    if (!reset && (_searching || _loadingMore)) return;
+    // Pagination always belongs to the exact, immutable applied criteria.
+    // Editing any draft input starts page one instead of appending other data.
+    if (!reset && _draftChanged) reset = true;
+    final criteria = reset ? _draft : _applied ?? _draft;
+    _searchCancellation?.cancel();
+    final cancellation = _searchCancellation = RequestCancellation();
+    final generation = ++_generation;
+    FocusScope.of(context).unfocus();
+    setState(() {
+      _searching = reset;
+      _loadingMore = !reset;
       if (reset) {
-        _searching = true;
         _results = null;
-      } else {
-        _loadingMore = true;
+        _applied = criteria;
       }
       _searchError = null;
     });
     final results = await _repository.search(
-      query: _queryController.text,
-      selected: selected,
-      attachments: attachments,
-      unread: unread,
+      query: criteria.query,
+      selected: criteria.selected,
+      attachments: criteria.attachments,
+      unread: criteria.unread,
       page: reset ? 1 : (_results?.page ?? 0) + 1,
+      cancellation: cancellation,
     );
-    if (!mounted) return;
+    if (!mounted || generation != _generation || cancellation.isCancelled) {
+      return;
+    }
     setState(() {
       _searching = false;
       _loadingMore = false;

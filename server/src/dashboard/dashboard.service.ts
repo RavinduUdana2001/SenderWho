@@ -1,3 +1,4 @@
+import { mailboxScope } from "../common/mailbox-scope";
 import { Injectable } from "@nestjs/common";
 import { CleanupCategory } from "@prisma/client";
 import { buildCleanupMessageWhere } from "../cleanup/cleanup.service";
@@ -9,6 +10,7 @@ import {
 import { PrismaService } from "../database/prisma.service";
 import { InboxHealthService } from "../inbox-health/inbox-health.service";
 import { getEmailAccountRecoveryAction } from "../providers/google-account-recovery";
+import { queuedScanRetries, scanJobId } from "../jobs/scan-retry-status";
 
 @Injectable()
 export class DashboardService {
@@ -47,35 +49,37 @@ export class DashboardService {
       unsubscribeSenders,
       inboxHealth,
     ] = await Promise.all([
-      this.prisma.sender.count({ where: { userId } }),
-      this.prisma.message.count({ where: { userId, isTrashed: false } }),
+      this.prisma.sender.count({ where: mailboxScope(userId) }),
       this.prisma.message.count({
-        where: { userId, isRead: false, isTrashed: false },
+        where: { ...mailboxScope(userId), isTrashed: false },
+      }),
+      this.prisma.message.count({
+        where: { ...mailboxScope(userId), isRead: false, isTrashed: false },
       }),
       this.prisma.message.count({
         where: {
-          userId,
+          ...mailboxScope(userId),
           isTrashed: false,
           category: "NEWSLETTERS",
         },
       }),
       this.prisma.message.count({
         where: {
-          userId,
+          ...mailboxScope(userId),
           isTrashed: false,
           category: "PROMOTIONS",
         },
       }),
       this.prisma.message.count({
-        where: { userId, isTrashed: false, category: "SPAM" },
+        where: { ...mailboxScope(userId), isTrashed: false, category: "SPAM" },
       }),
       this.prisma.sender.findMany({
-        where: { userId },
+        where: mailboxScope(userId),
         orderBy: { totalMessages: "desc" },
         take: 3,
       }),
       this.prisma.securityAlert.findMany({
-        where: { userId, status: "OPEN" },
+        where: { ...mailboxScope(userId), status: "OPEN" },
         take: 5,
         orderBy: { detectedAt: "desc" },
         include: {
@@ -84,10 +88,10 @@ export class DashboardService {
         },
       }),
       this.prisma.securityAlert.count({
-        where: { userId, status: "OPEN" },
+        where: { ...mailboxScope(userId), status: "OPEN" },
       }),
       this.prisma.emailAccount.findFirst({
-        where: { userId },
+        where: mailboxScope(userId).emailAccount,
         orderBy: [{ isPrimary: "desc" }, { createdAt: "desc" }],
         select: {
           id: true,
@@ -100,7 +104,7 @@ export class DashboardService {
       }),
       this.prisma.message.aggregate({
         where: {
-          userId,
+          ...mailboxScope(userId),
           ...cleanupOpportunityWhere,
         },
         _count: { _all: true },
@@ -108,7 +112,7 @@ export class DashboardService {
       }),
       this.prisma.sender.count({
         where: {
-          userId,
+          ...mailboxScope(userId),
           isTrusted: false,
           isBlocked: false,
           messages: {
@@ -124,6 +128,10 @@ export class DashboardService {
       this.inboxHealthService.getHealth(userId),
     ]);
 
+    const retries = await queuedScanRetries(
+      this.prisma,
+      latestAccount?.syncStatus === "FAILED" ? [latestAccount.id] : [],
+    );
     return {
       inboxHealth: {
         score: inboxHealth.score,
@@ -171,6 +179,7 @@ export class DashboardService {
       sync: latestAccount
         ? {
             ...latestAccount,
+            syncRetryAt: retries.get(scanJobId(latestAccount.id)) ?? null,
             recoveryAction: getEmailAccountRecoveryAction(
               latestAccount.provider,
               latestAccount.syncStatus,

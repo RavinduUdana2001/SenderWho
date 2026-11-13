@@ -1,3 +1,4 @@
+import { mailboxScope } from "../common/mailbox-scope";
 import { Injectable } from "@nestjs/common";
 import { Prisma, SenderCategory } from "@prisma/client";
 import { PrismaService } from "../database/prisma.service";
@@ -45,22 +46,8 @@ export class SearchService {
       ...(trustScore ? { trustScore } : {}),
     };
 
-    const senderWhere: Prisma.SenderWhereInput = {
-      userId,
-      ...(query
-        ? {
-            OR: [
-              { name: { contains: query } },
-              { email: { contains: query } },
-              { domain: { contains: query } },
-            ],
-          }
-        : {}),
-      ...senderFilters,
-      ...(receivedAfter ? { lastSeenAt: { gte: receivedAfter } } : {}),
-    };
     const messageWhere: Prisma.MessageWhereInput = {
-      userId,
+      ...mailboxScope(userId),
       isTrashed: false,
       ...(unreadOnly ? { isRead: false } : {}),
       ...(hasAttachments ? { hasAttachments: true } : {}),
@@ -78,17 +65,35 @@ export class SearchService {
       ...(trustScore ? { sender: { trustScore } } : {}),
     };
 
+    const senderWhere: Prisma.SenderWhereInput = {
+      ...mailboxScope(userId),
+      ...(query
+        ? {
+            OR: [
+              { name: { contains: query } },
+              { email: { contains: query } },
+              { domain: { contains: query } },
+            ],
+          }
+        : {}),
+      ...senderFilters,
+      // All active message conditions must match one message from this sender.
+      ...(unreadOnly || hasAttachments || receivedAfter
+        ? { messages: { some: messageWhere } }
+        : {}),
+    };
+
     const [senders, messages, senderCount, messageCount] = await Promise.all([
       this.prisma.sender.findMany({
         where: senderWhere,
-        orderBy: { lastSeenAt: "desc" },
+        orderBy: [{ lastSeenAt: "desc" }, { id: "desc" }],
         skip,
         take: limit,
       }),
       this.prisma.message.findMany({
         where: messageWhere,
         include: { sender: true },
-        orderBy: { receivedAt: "desc" },
+        orderBy: [{ receivedAt: "desc" }, { id: "desc" }],
         skip,
         take: limit,
       }),

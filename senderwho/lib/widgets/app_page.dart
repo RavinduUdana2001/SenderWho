@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
 
 import '../theme/app_colors.dart';
-import '../theme/app_motion.dart';
 import '../theme/app_system_ui.dart';
 import '../utils/responsive.dart';
 import 'sender_drawer.dart';
@@ -15,6 +14,9 @@ class AppPage extends StatelessWidget {
     this.drawer = true,
     this.bottomNavigationBar,
     this.maxContentWidth,
+    this.plainBackground = true,
+    this.header,
+    this.onRefresh,
   });
 
   final Widget child;
@@ -22,6 +24,9 @@ class AppPage extends StatelessWidget {
   final bool drawer;
   final Widget? bottomNavigationBar;
   final double? maxContentWidth;
+  final bool plainBackground;
+  final Widget? header;
+  final Future<void> Function()? onRefresh;
 
   @override
   Widget build(BuildContext context) {
@@ -39,7 +44,7 @@ class AppPage extends StatelessWidget {
         child: Padding(
           padding: EdgeInsets.fromLTRB(
             context.pageHorizontalPadding,
-            context.verticalGap(14),
+            header == null ? context.verticalGap(14) : 8,
             context.pageHorizontalPadding,
             context.verticalGap(32),
           ),
@@ -58,34 +63,52 @@ class AppPage extends StatelessWidget {
         drawerScrimColor: AppColors.brandNavy.withValues(
           alpha: AppColors.isDark(context) ? 0.78 : 0.58,
         ),
-        bottomNavigationBar:
-            bottomNavigationBar ??
-            (drawer ? const AppBottomNavigation() : null),
+        bottomNavigationBar: MediaQuery.viewInsetsOf(context).bottom > 0
+            ? null
+            : bottomNavigationBar ??
+                  (drawer ? const AppBottomNavigation() : null),
         body: DecoratedBox(
           decoration: BoxDecoration(
             color: AppColors.pageBackground(context),
-            gradient: LinearGradient(
-              begin: Alignment.topCenter,
-              end: Alignment.bottomCenter,
-              colors: AppColors.pageGradient(context),
-            ),
+            gradient: plainBackground
+                ? null
+                : LinearGradient(
+                    begin: Alignment.topCenter,
+                    end: Alignment.bottomCenter,
+                    colors: AppColors.pageGradient(context),
+                  ),
           ),
           child: Stack(
             fit: StackFit.expand,
             children: [
-              const RepaintBoundary(child: _BrandAmbientBackground()),
+              if (!plainBackground)
+                const RepaintBoundary(child: _BrandAmbientBackground()),
               SafeArea(
-                child: _PageContentEntrance(
-                  child: FocusTraversalGroup(
-                    policy: ReadingOrderTraversalPolicy(),
-                    child: scrollable
-                        ? SingleChildScrollView(
-                            keyboardDismissBehavior:
-                                ScrollViewKeyboardDismissBehavior.onDrag,
-                            physics: _pageScrollPhysics(context),
-                            child: content,
-                          )
-                        : SizedBox.expand(child: content),
+                child: FocusTraversalGroup(
+                  policy: ReadingOrderTraversalPolicy(),
+                  child: Column(
+                    children: [
+                      if (header != null)
+                        Center(
+                          child: ConstrainedBox(
+                            constraints: const BoxConstraints(maxWidth: 1100),
+                            child: Padding(
+                              padding: EdgeInsets.fromLTRB(
+                                context.pageHorizontalPadding,
+                                8,
+                                context.pageHorizontalPadding,
+                                4,
+                              ),
+                              child: header,
+                            ),
+                          ),
+                        ),
+                      Expanded(
+                        child: scrollable
+                            ? _scrollBody(context, content)
+                            : SizedBox.expand(child: content),
+                      ),
+                    ],
                   ),
                 ),
               ),
@@ -95,30 +118,17 @@ class AppPage extends StatelessWidget {
       ),
     );
   }
-}
 
-class _PageContentEntrance extends StatelessWidget {
-  const _PageContentEntrance({required this.child});
-
-  final Widget child;
-
-  @override
-  Widget build(BuildContext context) {
-    final disableAnimations = MediaQuery.disableAnimationsOf(context);
-    if (disableAnimations) return child;
-    return TweenAnimationBuilder<double>(
-      tween: Tween(begin: 0, end: 1),
-      duration: AppMotion.standard,
-      curve: AppMotion.enter,
-      child: child,
-      builder: (context, value, child) => Opacity(
-        opacity: value,
-        child: Transform.translate(
-          offset: Offset(0, (1 - value) * 10),
-          child: child,
-        ),
-      ),
+  Widget _scrollBody(BuildContext context, Widget content) {
+    final scroll = SingleChildScrollView(
+      key: PageStorageKey('page-${ModalRoute.of(context)?.hashCode}'),
+      keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
+      physics: _pageScrollPhysics(context),
+      child: content,
     );
+    return onRefresh == null
+        ? scroll
+        : RefreshIndicator(onRefresh: onRefresh!, child: scroll);
   }
 }
 
@@ -174,7 +184,7 @@ ScrollPhysics _pageScrollPhysics(BuildContext context) {
     TargetPlatform.iOS || TargetPlatform.macOS => const BouncingScrollPhysics(
       parent: AlwaysScrollableScrollPhysics(),
     ),
-    _ => const ClampingScrollPhysics(),
+    _ => const ClampingScrollPhysics(parent: AlwaysScrollableScrollPhysics()),
   };
 }
 

@@ -1,5 +1,6 @@
+import { mailboxScope } from "../common/mailbox-scope";
 import "reflect-metadata";
-import { JobStatus } from "@prisma/client";
+import { JobStatus, SenderCategory } from "@prisma/client";
 import { SenderControl, SenderKind } from "./dto/list-senders.dto";
 import { SendersService } from "./senders.service";
 
@@ -38,6 +39,52 @@ describe("SendersService ownership", () => {
     expect(prisma.sender.count).toHaveBeenCalledWith({
       where: expect.objectContaining({ userId: "owner-user" }),
     });
+  });
+
+  it("combines category, sender type, search, ownership and pagination for list and count", async () => {
+    const { prisma, service } = setup();
+    await service.list("owner-user", {
+      page: 2,
+      limit: 25,
+      skip: 25,
+      kind: SenderKind.COMPANIES,
+      control: SenderControl.TRUSTED,
+      category: SenderCategory.FINANCE,
+      query: "  bank  ",
+    });
+    const expectedWhere = {
+      ...mailboxScope("owner-user"),
+      AND: [
+        { category: { notIn: ["PEOPLE", "NEWSLETTERS"] } },
+        { category: "FINANCE" },
+      ],
+      isTrusted: true,
+      OR: [
+        { name: { contains: "bank" } },
+        { email: { contains: "bank" } },
+        { domain: { contains: "bank" } },
+      ],
+    };
+    expect(prisma.sender.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({ where: expectedWhere, skip: 25, take: 25 }),
+    );
+    expect(prisma.sender.count).toHaveBeenCalledWith({ where: expectedWhere });
+  });
+
+  it("filters and paginates sample senders with an accurate matching total", async () => {
+    const { prisma, service } = setup();
+    prisma.mockDataEnabled = true;
+    const result = await service.list("owner-user", {
+      page: 2,
+      limit: 1,
+      skip: 1,
+      kind: SenderKind.ALL,
+      control: SenderControl.ALL,
+      category: SenderCategory.PROMOTIONS,
+    });
+    expect(result.total).toBe(2);
+    expect(result.items.map((sender) => sender.name)).toEqual(["Daily Deals"]);
+    expect(prisma.sender.findMany).not.toHaveBeenCalled();
   });
 
   it("rejects foreign sender reads and controls before mutation", async () => {
